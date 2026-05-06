@@ -2,7 +2,7 @@
   "name": "hermes-ai-agent",
   "displayName": "Hermes AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "publisher": "joaompfp",
   "author": "joao",
   "license": "MIT",

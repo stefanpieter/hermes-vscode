@@ -5,7 +5,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { AcpClient } from './acpClient';
 import { normalizeHermesProfile } from './acpLaunchArgs';
-import { buildProfileMenuItems, parseHermesProfileList, profileDisplayName } from './profileUi';
+import { buildProfileMenuItems, isProfileRestartRequired, parseHermesProfileList, profileDisplayName } from './profileUi';
 import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
 
@@ -102,7 +102,7 @@ function readDefaultHermesProfileName(): string {
 }
 
 function profileRestartRequired(client: AcpClient | null): boolean {
-  return !!client?.running;
+  return isProfileRestartRequired(!!client?.running, client?.selectedProfile ?? '', client?.launchedProfile ?? '');
 }
 
 function buildProfileState(hermesPath: string, currentProfile: string, restartRequired: boolean, defaultProfileName = '') {
@@ -333,26 +333,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       restartRequired: () => profileRestartRequired(client),
       selectProfile: async (nextProfile: string) => {
         const normalized = normalizeHermesProfile(nextProfile);
-        if (normalized === hermesProfile) return;
+        if (normalized === hermesProfile) return false;
         await vscode.workspace.getConfiguration('hermes').update('profile', normalized, vscode.ConfigurationTarget.Global);
         hermesProfile = normalized;
         client?.setProfile(hermesProfile);
         outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile, defaultProfileName)} from webview`);
-        setStatus(client?.running ? 'connected' : 'disconnected');
+        if (client?.running) {
+          outputChannel.appendLine('[hermes] restarting ACP to apply selected profile');
+          client.stop();
+          session.reset();
+          await ensureConnected();
+          return true;
+        }
+        setStatus('disconnected');
+        return false;
       },
       customProfile: async () => {
         const typed = await vscode.window.showInputBox({
           prompt: 'Hermes profile name. Leave empty for default profile.',
           value: hermesProfile,
         });
-        if (typed === undefined) return;
+        if (typed === undefined) return false;
         const normalized = normalizeHermesProfile(typed);
-        if (normalized === hermesProfile) return;
+        if (normalized === hermesProfile) return false;
         await vscode.workspace.getConfiguration('hermes').update('profile', normalized, vscode.ConfigurationTarget.Global);
         hermesProfile = normalized;
         client?.setProfile(hermesProfile);
         outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile, defaultProfileName)} from webview`);
-        setStatus(client?.running ? 'connected' : 'disconnected');
+        if (client?.running) {
+          outputChannel.appendLine('[hermes] restarting ACP to apply selected profile');
+          client.stop();
+          session.reset();
+          await ensureConnected();
+          return true;
+        }
+        setStatus('disconnected');
+        return false;
       },
       restartHermes: async () => {
         if (!client?.running) return;

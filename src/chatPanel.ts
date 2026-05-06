@@ -20,8 +20,8 @@ export interface ProfileController {
   currentProfile(): string;
   profileItems(): ProfileMenuItem[];
   restartRequired(): boolean;
-  selectProfile(profile: string): Promise<void>;
-  customProfile(): Promise<void>;
+  selectProfile(profile: string): Promise<boolean>;
+  customProfile(): Promise<boolean>;
   restartHermes(): Promise<void>;
 }
 
@@ -363,12 +363,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     } else if (msg.type === 'selectProfile') {
       const nextProfile = msg.text ?? '';
       this.log(`[ui] select profile ${profileDisplayName(nextProfile)}`);
-      await this.profileController?.selectProfile(nextProfile);
+      const restarted = await this.profileController?.selectProfile(nextProfile);
+      if (restarted) this.post({ type: 'clear' });
       this.broadcastProfileState();
 
     } else if (msg.type === 'customProfile') {
       this.log('[ui] custom profile');
-      await this.profileController?.customProfile();
+      const restarted = await this.profileController?.customProfile();
+      if (restarted) this.post({ type: 'clear' });
       this.broadcastProfileState();
 
     } else if (msg.type === 'restartHermes') {

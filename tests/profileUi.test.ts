@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { buildProfileMenuItems, parseHermesProfileList, profileDisplayName } from '../src/profileUi';
+import { buildProfileMenuItems, isProfileRestartRequired, parseHermesProfileList, profileDisplayName } from '../src/profileUi';
 
 assert.strictEqual(profileDisplayName(''), 'Default');
 assert.strictEqual(profileDisplayName('', ' kinni '), 'kinni');
@@ -29,5 +29,10 @@ assert.deepStrictEqual(
 `),
   ['haku', 'kinni', 'noblepro'],
 );
+
+assert.strictEqual(isProfileRestartRequired(false, 'haku', 'kinni'), false);
+assert.strictEqual(isProfileRestartRequired(true, 'kinni', 'kinni'), false);
+assert.strictEqual(isProfileRestartRequired(true, '', ''), false);
+assert.strictEqual(isProfileRestartRequired(true, 'haku', 'kinni'), true);
 
 console.log('profileUi tests passed');

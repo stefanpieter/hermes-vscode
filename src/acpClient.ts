@@ -37,6 +37,7 @@ export class AcpClient extends EventEmitter {
   private requestHandler: IncomingRequestHandler | null = null;
 
   private profile = '';
+  private activeProfile = '';
 
   constructor(
     private hermesPath: string,
@@ -54,8 +55,15 @@ export class AcpClient extends EventEmitter {
   }
 
   setProfile(nextProfile: string): void {
-    if (this.proc) return;
     this.profile = normalizeHermesProfile(nextProfile);
+  }
+
+  get selectedProfile(): string {
+    return this.profile;
+  }
+
+  get launchedProfile(): string {
+    return this.activeProfile;
   }
 
   onNotification(handler: NotificationHandler): void {
@@ -75,6 +83,7 @@ export class AcpClient extends EventEmitter {
     if (this.proc) return;
 
     const args = buildHermesAcpArgs(this.profile);
+    this.activeProfile = this.profile;
     this.emit('log', `[acp] spawn ${this.hermesPath} ${args.join(' ')}`);
     this.proc = spawn(this.hermesPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],

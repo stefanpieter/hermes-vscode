@@ -26,6 +26,14 @@ export function parseHermesProfileList(output: string): string[] {
   return [...profiles].sort((a, b) => a.localeCompare(b));
 }
 
+export function isProfileRestartRequired(
+  running: boolean,
+  selectedProfile: string | undefined | null,
+  launchedProfile: string | undefined | null,
+): boolean {
+  return running && normalizeProfileId(selectedProfile) !== normalizeProfileId(launchedProfile);
+}
+
 export function buildProfileMenuItems(
   profiles: string[],
   currentProfile: string | undefined | null,
