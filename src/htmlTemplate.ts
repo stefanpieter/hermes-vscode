@@ -94,6 +94,8 @@ ${CSS_TEMPLATE}
       <span class="brand-version" id="status-version"></span>
       <span class="brand-sep">·</span>
       <button id="model-btn-header" title="Switch model">${escapeHtml(modelLabel)} ▾</button>
+      <span class="brand-sep">·</span>
+      <button id="profile-btn-header" title="Switch Hermes profile"><span class="profile-dot"></span><span id="profile-label">Default</span> ▾</button>
     </div>
     <div id="header-session">
       <button id="status-session" title="Sessions">new session</button>
@@ -106,6 +108,7 @@ ${CSS_TEMPLATE}
     <div id="model-menu" style="display:none">
       ${modelMenuHtml}
     </div>
+    <div id="profile-menu" class="status-dropdown" style="display:none"></div>
   </div>
   <div id="messages">
     <div id="empty-state">
@@ -236,12 +239,23 @@ const CSS_TEMPLATE = /* css */ `
     #header-brand .brand-text { font-weight: 700; color: var(--gold); letter-spacing: 0.04em; }
     #header-brand .brand-sep { opacity: 0.3; }
     #header-brand .brand-version { opacity: 0.4; font-size: 0.85em; }
-    #model-btn-header {
+    #model-btn-header, #profile-btn-header {
       background: none; border: none; cursor: pointer;
       color: var(--vscode-descriptionForeground);
       font: inherit; font-size: 1em; padding: 0;
     }
-    #model-btn-header:hover { color: var(--gold); }
+    #model-btn-header:hover, #profile-btn-header:hover { color: var(--gold); }
+    #profile-btn-header {
+      display: inline-flex; align-items: center; gap: 4px;
+      max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #profile-label { overflow: hidden; text-overflow: ellipsis; }
+    .profile-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--gold); box-shadow: 0 0 8px var(--gold-subtle);
+      flex: 0 0 auto;
+    }
 
     /* Row 2: session + tokens */
     #header-session {
@@ -324,6 +338,20 @@ const CSS_TEMPLATE = /* css */ `
       border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
     }
     .status-dropdown .menu-footer:hover { background: var(--gold-subtle); color: var(--gold); }
+    #profile-menu .profile-row-main { overflow: hidden; text-overflow: ellipsis; }
+    #profile-btn-header.restart-required .profile-dot { background: var(--vscode-testing-iconQueued, #cca700); }
+    .profile-restart {
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+      padding: 8px 10px; font-size: 0.78em; color: var(--vscode-descriptionForeground);
+      display: flex; align-items: center; gap: 8px; justify-content: space-between;
+      background: rgba(245, 197, 66, 0.06);
+    }
+    #profile-restart-btn {
+      border: 1px solid var(--gold-border); border-radius: 999px;
+      background: var(--gold-subtle); color: var(--gold); cursor: pointer;
+      font: inherit; padding: 2px 8px; white-space: nowrap;
+    }
+    #profile-restart-btn:hover { background: rgba(245, 197, 66, 0.18); }
     .session-action {
       opacity: 0; cursor: pointer; font-size: 0.9em; flex-shrink: 0;
       padding: 0 2px; transition: opacity 0.15s;

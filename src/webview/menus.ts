@@ -4,6 +4,7 @@
 
 import DOMPurify from 'dompurify';
 import type { FromWebview } from '../types';
+import type { ProfileMenuItem } from '../profileUi';
 import type { WebviewState } from './state';
 import { fmtAge, fmtTok } from './renderers';
 
@@ -14,13 +15,67 @@ type Vscode = { postMessage(msg: FromWebview): void };
 export function closeAllDropdowns(els: {
   modelMenu: HTMLElement; sessionPicker: HTMLElement;
   skillsMenu: HTMLElement; overflowMenu: HTMLElement;
+  profileMenu?: HTMLElement;
   cmdArgPopover?: HTMLElement;
 }): void {
   els.modelMenu.style.display = 'none';
   els.sessionPicker.style.display = 'none';
   els.skillsMenu.style.display = 'none';
   els.overflowMenu.style.display = 'none';
+  if (els.profileMenu) els.profileMenu.style.display = 'none';
   if (els.cmdArgPopover) els.cmdArgPopover.style.display = 'none';
+}
+
+// ── Profile picker ───────────────────────────────────
+export function buildProfileMenu(
+  container: HTMLElement,
+  items: ProfileMenuItem[],
+  restartRequired: boolean,
+): void {
+  const rows = items.map(item => {
+    const active = item.active ? ' active' : '';
+    const mark = item.active ? '✓ ' : '';
+    const sub = item.id ? 'Hermes profile' : 'Use configured/default profile';
+    return `<div class="menu-item profile-option${active}" data-profile="${DOMPurify.sanitize(item.id)}">
+      <span class="profile-row-main">${mark}${DOMPurify.sanitize(item.label)}</span>
+      <span class="item-meta">${sub}</span>
+    </div>`;
+  }).join('');
+  const restart = restartRequired
+    ? `<div class="profile-restart">Profile changes apply after restart. <button id="profile-restart-btn">Restart Hermes</button></div>`
+    : '';
+  container.innerHTML = rows +
+    `<div class="menu-footer profile-custom">＋ Enter custom profile…</div>` +
+    restart;
+}
+
+export function setupProfileHandlers(
+  profileMenu: HTMLElement,
+  vscode: Vscode,
+  closeFn: () => void,
+): void {
+  profileMenu.addEventListener('click', (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const restart = target.closest<HTMLElement>('#profile-restart-btn');
+    if (restart) {
+      e.stopPropagation();
+      closeFn();
+      vscode.postMessage({ type: 'restartHermes' } as any);
+      return;
+    }
+    const custom = target.closest<HTMLElement>('.profile-custom');
+    if (custom) {
+      e.stopPropagation();
+      closeFn();
+      vscode.postMessage({ type: 'customProfile' } as any);
+      return;
+    }
+    const opt = target.closest<HTMLElement>('.profile-option');
+    if (!opt) return;
+    e.stopPropagation();
+    closeFn();
+    vscode.postMessage({ type: 'selectProfile', text: opt.dataset.profile ?? '' } as any);
+  });
 }
 
 // ── Session picker ───────────────────────────────────

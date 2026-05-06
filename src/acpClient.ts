@@ -14,6 +14,7 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import { buildHermesAcpArgs, normalizeHermesProfile } from './acpLaunchArgs';
 
 export type IncomingRequestHandler = (
   method: string,
@@ -35,17 +36,26 @@ export class AcpClient extends EventEmitter {
   private notificationHandler: NotificationHandler | null = null;
   private requestHandler: IncomingRequestHandler | null = null;
 
+  private profile = '';
+
   constructor(
     private hermesPath: string,
     private readonly envOverrides: NodeJS.ProcessEnv = {},
     private readonly debugLogging = false,
+    profile = '',
   ) {
     super();
+    this.profile = normalizeHermesProfile(profile);
   }
 
   setHermesPath(nextPath: string): void {
     if (this.proc) return;
     this.hermesPath = nextPath;
+  }
+
+  setProfile(nextProfile: string): void {
+    if (this.proc) return;
+    this.profile = normalizeHermesProfile(nextProfile);
   }
 
   onNotification(handler: NotificationHandler): void {
@@ -64,8 +74,9 @@ export class AcpClient extends EventEmitter {
   async start(): Promise<void> {
     if (this.proc) return;
 
-    this.emit('log', `[acp] spawn ${this.hermesPath} acp`);
-    this.proc = spawn(this.hermesPath, ['acp'], {
+    const args = buildHermesAcpArgs(this.profile);
+    this.emit('log', `[acp] spawn ${this.hermesPath} ${args.join(' ')}`);
+    this.proc = spawn(this.hermesPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...this.envOverrides },
     });

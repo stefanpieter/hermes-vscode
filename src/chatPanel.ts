@@ -12,7 +12,18 @@ import { SessionStore } from './sessionStore';
 import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
+import { profileDisplayName } from './profileUi';
+import type { ProfileMenuItem } from './profileUi';
 import type { StoredMessage, ToWebview, FromWebview } from './types';
+
+export interface ProfileController {
+  currentProfile(): string;
+  profileItems(): ProfileMenuItem[];
+  restartRequired(): boolean;
+  selectProfile(profile: string): Promise<void>;
+  customProfile(): Promise<void>;
+  restartHermes(): Promise<void>;
+}
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'hermes.chatView';
@@ -39,6 +50,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly hermesVersion: string = '',
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void = () => {},
+    private readonly profileController?: ProfileController,
   ) {
     this.mediaRoot = path.join(this.context.globalStorageUri.fsPath, 'media');
     fs.mkdirSync(this.mediaRoot, { recursive: true });
@@ -72,6 +84,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // Emit initial state
     setTimeout(() => {
       this.post({ type: 'statusBar', model: this.initialModel, version: this.hermesVersion, skillGroups: this.skillGroups });
+      this.broadcastProfileState();
       this.broadcastSessions(this.store);
       // Restore last session's history into the view
       if (active && active.messages.length > 0) {
@@ -347,6 +360,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.broadcastSessions(this.store);
       }
 
+    } else if (msg.type === 'selectProfile') {
+      const nextProfile = msg.text ?? '';
+      this.log(`[ui] select profile ${profileDisplayName(nextProfile)}`);
+      await this.profileController?.selectProfile(nextProfile);
+      this.broadcastProfileState();
+
+    } else if (msg.type === 'customProfile') {
+      this.log('[ui] custom profile');
+      await this.profileController?.customProfile();
+      this.broadcastProfileState();
+
+    } else if (msg.type === 'restartHermes') {
+      this.log('[ui] restart Hermes for profile change');
+      await this.profileController?.restartHermes();
+      this.post({ type: 'clear' });
+      this.broadcastProfileState();
+
     } else if (msg.type === 'toggleSkill' && msg.text) {
       const idx = this.selectedSkills.indexOf(msg.text);
       if (idx >= 0) {
@@ -502,6 +532,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return normalizedFile.startsWith(normalizedRoot) && allowedExt.has(path.extname(normalizedFile).toLowerCase());
   }
 
+
+  public refreshProfileState(): void {
+    this.broadcastProfileState();
+  }
+
+  private broadcastProfileState(): void {
+    if (!this.profileController) return;
+    const profile = this.profileController.currentProfile();
+    this.post({
+      type: 'profileList',
+      profile,
+      profileItems: this.profileController.profileItems(),
+      restartRequired: this.profileController.restartRequired(),
+    });
+  }
 
   private broadcastSessions(_store: SessionStore): void {
     this.post({

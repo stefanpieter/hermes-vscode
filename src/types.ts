@@ -4,6 +4,7 @@
  */
 
 import type { SkillGroup } from './skillCatalog';
+import type { ProfileMenuItem } from './profileUi';
 
 // ── Session & History ────────────────────────────────
 
@@ -70,7 +71,7 @@ export interface ToWebview {
   type:
     | 'append' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'clear' | 'busy'
-    | 'statusBar' | 'sessionList' | 'loadHistory';
+    | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;
   toolName?: string;
   toolStatus?: string;
@@ -96,6 +97,10 @@ export interface ToWebview {
   selectedSkills?: string[];
   skillGroups?: SkillGroup[];
   contextAnnotation?: string;
+  profile?: string;
+  profiles?: string[];
+  profileItems?: ProfileMenuItem[];
+  restartRequired?: boolean;
 }
 
 export interface FromWebview {
@@ -103,7 +108,8 @@ export interface FromWebview {
     | 'send' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
-    | 'toggleSkill' | 'renameSession' | 'deleteSession';
+    | 'toggleSkill' | 'renameSession' | 'deleteSession'
+    | 'selectProfile' | 'customProfile' | 'restartHermes';
   text?: string;
   sessionId?: string;
   model?: string;

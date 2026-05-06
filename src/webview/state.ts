@@ -25,6 +25,10 @@ export interface WebviewState {
   pendingQueuedTexts: string[];
   prevQueueCount: number;
 
+  // Profiles
+  currentProfile: string;
+  profileRestartRequired: boolean;
+
   // Skills
   selectedSkillNames: Set<string>;
   skillGroupsData: { category: string; skills: { name: string; description: string }[] }[];
@@ -45,6 +49,8 @@ export function createInitialState(): WebviewState {
     pendingSlashResponse: false,
     pendingQueuedTexts: [],
     prevQueueCount: 0,
+    currentProfile: '',
+    profileRestartRequired: false,
     selectedSkillNames: new Set(),
     skillGroupsData: [],
   };

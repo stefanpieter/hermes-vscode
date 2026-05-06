@@ -14,6 +14,7 @@ import {
 } from './renderers';
 import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
+  buildProfileMenu, setupProfileHandlers,
   buildSkillsMenu, setupSkillsHandlers, updateStatusBar,
 } from './menus';
 
@@ -45,6 +46,9 @@ const ctxBar           = document.getElementById('ctx-bar') as HTMLDivElement;
 const ctxBarFresh      = document.getElementById('ctx-bar-fresh') as HTMLDivElement;
 const modelBtnHeader   = document.getElementById('model-btn-header') as HTMLButtonElement;
 const modelMenu        = document.getElementById('model-menu') as HTMLDivElement;
+const profileBtnHeader = document.getElementById('profile-btn-header') as HTMLButtonElement;
+const profileLabelEl   = document.getElementById('profile-label') as HTMLSpanElement;
+const profileMenu      = document.getElementById('profile-menu') as HTMLDivElement;
 const overflowBtn      = document.getElementById('overflow-btn') as HTMLButtonElement;
 const overflowMenu     = document.getElementById('overflow-menu') as HTMLDivElement;
 const emptyState       = document.getElementById('empty-state') as HTMLDivElement;
@@ -57,7 +61,7 @@ const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivEl
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
 
-const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, cmdArgPopover };
+const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profileMenu, cmdArgPopover };
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
@@ -203,6 +207,13 @@ modelMenu.addEventListener('click', (e) => {
   if (!opt?.dataset.command) return;
   closeFn(); vscode.postMessage({ type: 'switchModel', model: opt.dataset.command });
 });
+
+// Profile switcher
+profileBtnHeader.addEventListener('click', (e) => {
+  e.stopPropagation(); const open = profileMenu.style.display !== 'none';
+  closeFn(); if (!open) profileMenu.style.display = 'block';
+});
+setupProfileHandlers(profileMenu, vscode, closeFn);
 
 // Slash-command menu (hybrid dispatch: execute / confirm / prompt-for-arg)
 function hideCmdArg(): void {
@@ -515,6 +526,18 @@ window.addEventListener('message', (e: MessageEvent) => {
           attachChip.style.display = 'none'; attachChip.innerHTML = '';
         }
       }
+      break;
+    }
+
+    case 'profileList': {
+      S.currentProfile = msg.profile ?? '';
+      S.profileRestartRequired = !!msg.restartRequired;
+      profileLabelEl.textContent = S.currentProfile || 'Default';
+      profileBtnHeader.classList.toggle('restart-required', S.profileRestartRequired);
+      profileBtnHeader.title = S.profileRestartRequired
+        ? 'Switch Hermes profile (restart required to apply current selection)'
+        : 'Switch Hermes profile';
+      buildProfileMenu(profileMenu, msg.profileItems ?? [], S.profileRestartRequired);
       break;
     }
 
