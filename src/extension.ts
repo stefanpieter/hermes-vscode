@@ -5,7 +5,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { AcpClient } from './acpClient';
 import { normalizeHermesProfile } from './acpLaunchArgs';
-import { buildProfileMenuItems, profileDisplayName } from './profileUi';
+import { buildProfileMenuItems, parseHermesProfileList, profileDisplayName } from './profileUi';
 import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
 
@@ -88,20 +88,29 @@ function readConfiguredHermesProfile(): { value: string; workspaceOverrideIgnore
   return { value, workspaceOverrideIgnored };
 }
 
-function profileLabel(profile: string): string {
-  return profile ? `profile ${profile}` : 'default profile';
+function profileLabel(profile: string, defaultProfileName = ''): string {
+  const displayName = profileDisplayName(profile, defaultProfileName);
+  return profile ? `profile ${displayName}` : `default profile (${displayName})`;
+}
+
+function readDefaultHermesProfileName(): string {
+  try {
+    return fs.readFileSync(path.join(os.homedir(), '.hermes', 'default_profile_name'), 'utf8').trim();
+  } catch {
+    return '';
+  }
 }
 
 function profileRestartRequired(client: AcpClient | null): boolean {
   return !!client?.running;
 }
 
-function buildProfileState(hermesPath: string, currentProfile: string, restartRequired: boolean) {
+function buildProfileState(hermesPath: string, currentProfile: string, restartRequired: boolean, defaultProfileName = '') {
   const profiles = readAvailableHermesProfiles(hermesPath);
   if (currentProfile && !profiles.includes(currentProfile)) profiles.push(currentProfile);
   return {
     profile: currentProfile,
-    profileItems: buildProfileMenuItems(profiles, currentProfile),
+    profileItems: buildProfileMenuItems(profiles, currentProfile, defaultProfileName),
     restartRequired,
   };
 }
@@ -113,13 +122,7 @@ function readAvailableHermesProfiles(hermesPath: string): string[] {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${path.dirname(hermesPath)}:${process.env.PATH ?? ''}` },
     });
-    const profiles = new Set<string>();
-    for (const line of output.split(/\r?\n/)) {
-      const withoutMarker = line.replace(/^[\s*›>•-]+/, '').trim();
-      const match = withoutMarker.match(/^([A-Za-z0-9_.-]+)\b/);
-      if (match) profiles.add(match[1]);
-    }
-    return [...profiles].sort((a, b) => a.localeCompare(b));
+    return parseHermesProfileList(output);
   } catch {
     return [];
   }
@@ -256,13 +259,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine('[security] Ignoring workspace-scoped hermes.profile override');
   }
   let hermesProfile = configuredProfile.value;
+  let defaultProfileName = readDefaultHermesProfileName();
 
   outputChannel.appendLine(`[hermes] homedir: ${os.homedir()}`);
   outputChannel.appendLine(`[hermes] platform: ${process.platform}`);
   try {
     hermesPath = resolveHermesBinary(hermesPath);
     outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
-    outputChannel.appendLine(`[hermes] ${profileLabel(hermesProfile)}`);
+    outputChannel.appendLine(`[hermes] ${profileLabel(hermesProfile, defaultProfileName)}`);
   } catch (err) {
     outputChannel.appendLine(`[security] invalid Hermes binary: ${err}`);
   }
@@ -325,7 +329,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     line => outputChannel.appendLine(line),
     {
       currentProfile: () => hermesProfile,
-      profileItems: () => buildProfileState(hermesPath, hermesProfile, profileRestartRequired(client)).profileItems,
+      profileItems: () => buildProfileState(hermesPath, hermesProfile, profileRestartRequired(client), defaultProfileName).profileItems,
       restartRequired: () => profileRestartRequired(client),
       selectProfile: async (nextProfile: string) => {
         const normalized = normalizeHermesProfile(nextProfile);
@@ -333,7 +337,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.workspace.getConfiguration('hermes').update('profile', normalized, vscode.ConfigurationTarget.Global);
         hermesProfile = normalized;
         client?.setProfile(hermesProfile);
-        outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile)} from webview`);
+        outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile, defaultProfileName)} from webview`);
         setStatus(client?.running ? 'connected' : 'disconnected');
       },
       customProfile: async () => {
@@ -347,7 +351,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.workspace.getConfiguration('hermes').update('profile', normalized, vscode.ConfigurationTarget.Global);
         hermesProfile = normalized;
         client?.setProfile(hermesProfile);
-        outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile)} from webview`);
+        outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile, defaultProfileName)} from webview`);
         setStatus(client?.running ? 'connected' : 'disconnected');
       },
       restartHermes: async () => {
@@ -384,11 +388,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const profiles = readAvailableHermesProfiles(hermesPath);
       const picked = await vscode.window.showQuickPick(
         [
-          { label: 'Default profile', description: 'Use Hermes current/default profile', profile: '' },
+          { label: profileDisplayName('', defaultProfileName), description: 'Use Hermes current/default profile', profile: '' },
           ...profiles.map(profile => ({ label: profile, description: 'Hermes profile', profile })),
           { label: '$(pencil) Enter custom profile…', description: 'Type a profile name manually', profile: undefined },
         ],
-        { placeHolder: `Current: ${profileLabel(hermesProfile)}` },
+        { placeHolder: `Current: ${profileLabel(hermesProfile, defaultProfileName)}` },
       );
       if (!picked) return;
 
@@ -408,14 +412,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.workspace.getConfiguration('hermes').update('profile', nextProfile, vscode.ConfigurationTarget.Global);
       hermesProfile = nextProfile;
       client?.setProfile(hermesProfile);
-      outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile)}`);
+      outputChannel.appendLine(`[hermes] selected ${profileLabel(hermesProfile, defaultProfileName)}`);
       setStatus(client?.running ? 'connected' : 'disconnected');
       panel.refreshProfileState();
 
       if (client?.running) {
         const restart = 'Restart Hermes';
         const choice = await vscode.window.showInformationMessage(
-          `Hermes profile changed to ${profileLabel(hermesProfile)}. Restart ACP to use it?`,
+          `Hermes profile changed to ${profileLabel(hermesProfile, defaultProfileName)}. Restart ACP to use it?`,
           restart,
         );
         if (choice === restart) {
@@ -433,7 +437,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.StatusBarAlignment.Right,
     100,
   );
-  statusItem.text = `$(circle-outline) Hermes${hermesProfile ? `: ${hermesProfile}` : ''}`;
+  statusItem.text = `$(circle-outline) Hermes: ${profileDisplayName(hermesProfile, defaultProfileName)}`;
   statusItem.command = 'hermes.openChat';
   statusItem.show();
   context.subscriptions.push(statusItem);
@@ -444,7 +448,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       disconnected: '$(circle-outline)',
       connecting: '$(loading~spin)',
     };
-    statusItem.text = `${icons[state]} Hermes${hermesProfile ? `: ${hermesProfile}` : ''}`;
+    statusItem.text = `${icons[state]} Hermes: ${profileDisplayName(hermesProfile, defaultProfileName)}`;
     panel.post({ type: 'status', status: state });
     panel.refreshProfileState();
   }
@@ -465,6 +469,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         outputChannel.appendLine('[security] Ignoring workspace-scoped hermes.profile override');
       }
       hermesProfile = configuredProfileNow.value;
+      defaultProfileName = readDefaultHermesProfileName();
     } catch (err) {
       setStatus('disconnected');
       vscode.window.showErrorMessage(`Hermes: invalid binary path — ${err}`);

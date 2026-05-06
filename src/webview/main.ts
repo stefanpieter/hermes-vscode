@@ -532,7 +532,8 @@ window.addEventListener('message', (e: MessageEvent) => {
     case 'profileList': {
       S.currentProfile = msg.profile ?? '';
       S.profileRestartRequired = !!msg.restartRequired;
-      profileLabelEl.textContent = S.currentProfile || 'Default';
+      const activeProfileItem = msg.profileItems?.find(item => item.active);
+      profileLabelEl.textContent = activeProfileItem?.label ?? (S.currentProfile || 'Default');
       profileBtnHeader.classList.toggle('restart-required', S.profileRestartRequired);
       profileBtnHeader.title = S.profileRestartRequired
         ? 'Switch Hermes profile (restart required to apply current selection)'

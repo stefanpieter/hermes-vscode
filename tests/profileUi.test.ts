@@ -1,8 +1,9 @@
 import * as assert from 'assert';
-import { buildProfileMenuItems, profileDisplayName } from '../src/profileUi';
+import { buildProfileMenuItems, parseHermesProfileList, profileDisplayName } from '../src/profileUi';
 
 assert.strictEqual(profileDisplayName(''), 'Default');
-assert.strictEqual(profileDisplayName('  noblepro  '), 'noblepro');
+assert.strictEqual(profileDisplayName('', ' kinni '), 'kinni');
+assert.strictEqual(profileDisplayName('  noblepro  ', 'kinni'), 'noblepro');
 
 assert.deepStrictEqual(
   buildProfileMenuItems(['haku', 'noblepro', 'haku', ''], 'noblepro'),
@@ -14,8 +15,19 @@ assert.deepStrictEqual(
 );
 
 assert.deepStrictEqual(
-  buildProfileMenuItems([], ''),
-  [{ id: '', label: 'Default', active: true }],
+  buildProfileMenuItems([], '', 'kinni'),
+  [{ id: '', label: 'kinni', active: true }],
+);
+
+assert.deepStrictEqual(
+  parseHermesProfileList(`
+ Profile          Model                        Gateway      Alias
+ ───────────────    ───────────────────────────    ───────────    ────────────
+ ◆kinni           gpt-5.5                      running      kinni
+  haku            gpt-5.5                      running      haku
+  noblepro        gpt-5.5                      running      noblepro
+`),
+  ['haku', 'kinni', 'noblepro'],
 );
 
 console.log('profileUi tests passed');
