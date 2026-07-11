@@ -6,6 +6,14 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.0.1] — 2026-07-11
+
+### Fixed
+
+- Background process completions delivered by Hermes after a prompt ends now appear immediately as standalone messages and persist in session history.
+- Background updates are isolated to the active ACP session and no longer contaminate the next foreground response.
+- Session-load history replay remains correctly routed and is not misclassified as a background notification.
+
 ## [3.0.0] — 2026-04-06
 
 Release candidate. Ships the full v3.0.0 architecture plus a major slash-command surface expansion, session-persistence and context-loading fixes, and a redesigned composer layout — all validated against live Hermes usage.

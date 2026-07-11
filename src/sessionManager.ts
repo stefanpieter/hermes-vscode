@@ -51,6 +51,12 @@ export class SessionManager {
   /** Set by cancel() to gate out stale session/update notifications from Hermes. */
   private cancelled = false;
 
+  /** True only while a session/prompt request is in flight. */
+  private promptActive = false;
+
+  /** True while session/load is synchronously replaying persisted history. */
+  private replayActive = false;
+
   constructor(
     private readonly client: AcpClient,
     private readonly log: (line: string) => void = () => {},
@@ -103,6 +109,11 @@ export class SessionManager {
       this.storedSessionId = null;
       try {
         this.log(`[session] attempting session/load ${storedId}`);
+        // ACP requires history replay notifications before session/load returns.
+        // Route those updates to the pending stored session, but keep them out
+        // of the post-prompt background-notification path.
+        this.sessionId = storedId;
+        this.replayActive = true;
         const result = await this.client.call('session/load', {
           sessionId: storedId,
           cwd,
@@ -110,13 +121,16 @@ export class SessionManager {
         });
         // Adapter returns null when session not found — load_session() → None
         if (result !== null && result !== undefined) {
-          this.sessionId = storedId;
           this.log(`[session] resumed ${storedId}`);
           return this.sessionId;
         }
+        this.sessionId = null;
         this.log(`[session] stored session ${storedId} not found on adapter, creating new`);
       } catch (err) {
+        this.sessionId = null;
         this.log(`[session] session/load failed (${err}), creating new`);
+      } finally {
+        this.replayActive = false;
       }
       // Fall through to session/new
     }
@@ -149,23 +163,28 @@ export class SessionManager {
     // Wrap the call in a cancellable promise so cancel() can unblock us immediately
     // without having to wait for Hermes to finish processing session/cancel.
     let promptResponse: Record<string, unknown> = {};
-    await new Promise<void>((resolve, reject) => {
-      this.promptReject = reject;
+    this.promptActive = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.promptReject = reject;
 
-      this.client
-        .call('session/prompt', {
-          sessionId,
-          prompt: [{ type: 'text', text }],
-        })
-        .then((result) => {
-          promptResponse = (result as Record<string, unknown>) ?? {};
-          resolve();
-        })
-        .catch(reject)
-        .finally(() => {
-          this.promptReject = null;
-        });
-    });
+        this.client
+          .call('session/prompt', {
+            sessionId,
+            prompt: [{ type: 'text', text }],
+          })
+          .then((result) => {
+            promptResponse = (result as Record<string, unknown>) ?? {};
+            resolve();
+          })
+          .catch(reject)
+          .finally(() => {
+            this.promptReject = null;
+          });
+      });
+    } finally {
+      this.promptActive = false;
+    }
 
     // Extract current context usage from PromptResponse.
     // usage.inputTokens = last_prompt_tokens (total sent to API including cached).
@@ -210,6 +229,10 @@ export class SessionManager {
     if (!this.updateHandler) return;
 
     const session_id = params.sessionId as string;
+    if (!session_id || session_id !== this.sessionId) {
+      this.log(`[session] ignored update for inactive session ${session_id || '(missing)'}`);
+      return;
+    }
     const update = params.update as Record<string, unknown> | undefined;
     if (!update) return;
 
@@ -221,6 +244,15 @@ export class SessionManager {
         if (this.cancelled) return;
         const text = extractTextContent(update);
         if (text === null) return;
+        const meta = update['_meta'] as Record<string, unknown> | undefined;
+        const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
+        const isBackground = hermesMeta?.backgroundNotification === true
+          || (!this.promptActive && !this.replayActive);
+        event.background = isBackground;
+        if (isBackground) {
+          event.text = text;
+          break;
+        }
         const result = deduplicateChunk(text, this.accumulated);
         if (result.action === 'drop') {
           if (this.accumulated.endsWith(text)) {
