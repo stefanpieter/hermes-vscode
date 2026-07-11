@@ -101,8 +101,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (event.text) {
         // Convert MEDIA:/path references to webview-safe img URIs
         const converted = this.convertMediaPaths(event.text, webviewView.webview);
-        this.lastTurnText += event.text;
-        this.post({ type: 'append', text: converted });
+        if (event.background) {
+          // A post-prompt ACP notification is a complete standalone message:
+          // render and persist it immediately instead of contaminating the
+          // next normal turn's streaming buffers.
+          this.store.addTurnMessages([], event.text);
+          this.post({ type: 'backgroundNotification', text: converted });
+          this.broadcastSessions(this.store);
+        } else {
+          this.lastTurnText += event.text;
+          this.post({ type: 'append', text: converted });
+        }
       }
       if (event.thinkingText) {
         this.post({ type: 'thinking', text: event.thinkingText });

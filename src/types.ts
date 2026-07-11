@@ -46,6 +46,7 @@ export interface TodoState {
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
+  background?: boolean;
   thinkingText?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -69,7 +70,7 @@ export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
 
 export interface ToWebview {
   type:
-    | 'append' | 'thinking' | 'toolCall' | 'done'
+    | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'clear' | 'busy'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;

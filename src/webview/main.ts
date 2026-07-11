@@ -381,6 +381,13 @@ window.addEventListener('message', (e: MessageEvent) => {
       scheduleFlush();
       break;
 
+    case 'backgroundNotification': {
+      const notification = appendMessage(messagesEl, 'agent', msg.text ?? '');
+      renderMarkdown(notification, msg.text ?? '');
+      autoScroll();
+      break;
+    }
+
     case 'thinking':
       if (!S.thinkingStatusEl) {
         document.getElementById('waiting')?.remove();

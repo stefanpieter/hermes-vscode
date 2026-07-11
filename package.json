@@ -2,7 +2,7 @@
   "name": "hermes-ai-agent",
   "displayName": "Hermes AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
-  "version": "3.2.2",
+  "version": "3.2.3",
   "publisher": "joaompfp",
   "author": "joao",
   "license": "MIT",
@@ -111,9 +111,11 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "webpack --mode production",
-    "test": "tsc --module commonjs --target ES2020 --types node --skipLibCheck --esModuleInterop --strict --outDir out-test tests/acpLaunchArgs.test.ts tests/profileUi.test.ts src/acpLaunchArgs.ts src/profileUi.ts && node out-test/tests/acpLaunchArgs.test.js && node out-test/tests/profileUi.test.js",
+    "test": "npm run test:profile && npm run test:background",
     "dev": "webpack --mode development --watch",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "test:profile": "tsc --module commonjs --target ES2020 --types node --skipLibCheck --esModuleInterop --strict --outDir out-test tests/acpLaunchArgs.test.ts tests/profileUi.test.ts src/acpLaunchArgs.ts src/profileUi.ts && node out-test/tests/acpLaunchArgs.test.js && node out-test/tests/profileUi.test.js",
+    "test:background": "tsx --test src/test/**/*.test.ts"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.5",
@@ -123,7 +125,8 @@
     "ts-loader": "^9.5.0",
     "typescript": "^5.3.0",
     "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "tsx": "^4.20.6"
   },
   "dependencies": {
     "dompurify": "^3.3.3",
