@@ -393,6 +393,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await ensureConnected();
     }),
 
+    vscode.commands.registerCommand('hermes.restartAgent', async () => {
+      outputChannel.appendLine('[hermes] restarting ACP from command palette');
+      if (client?.running) client.stop();
+      session.reset();
+      panel.post({ type: 'clear' });
+      await ensureConnected();
+      vscode.window.showInformationMessage('Hermes Agent restarted.');
+    }),
+
     vscode.commands.registerCommand('hermes.newSession', () => {
       outputChannel.appendLine('[ui] new session');
       session.reset();

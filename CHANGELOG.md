@@ -6,6 +6,12 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.5] — 2026-07-12
+
+### Added
+
+- Permanent `Hermes: Restart Agent` Command Palette action for safely restarting the ACP subprocess without changing profiles.
+
 ## [3.2.4] — 2026-07-12
 
 ### Added
