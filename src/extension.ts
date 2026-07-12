@@ -380,6 +380,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    panel,
     vscode.window.registerWebviewViewProvider(ChatPanelProvider.viewId, panel, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

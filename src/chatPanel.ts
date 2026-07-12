@@ -13,6 +13,8 @@ import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
+import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
+import { bindPromptSession } from './promptSessionBinding';
 import type { ProfileMenuItem } from './profileUi';
 import type { BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
 
@@ -25,7 +27,7 @@ export interface ProfileController {
   restartHermes(): Promise<void>;
 }
 
-export class ChatPanelProvider implements vscode.WebviewViewProvider {
+export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewId = 'hermes.chatView';
 
   private view?: vscode.WebviewView;
@@ -34,6 +36,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
   private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
+  private readonly backgroundMessages: BackgroundMessageAccumulator;
 
   private readonly store: SessionStore;
   private readonly modelGroups: ModelMenuGroup[] = loadHermesModelGroups();
@@ -56,6 +59,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.mediaRoot = path.join(this.context.globalStorageUri.fsPath, 'media');
     fs.mkdirSync(this.mediaRoot, { recursive: true });
     this.store = new SessionStore(context);
+    this.backgroundMessages = new BackgroundMessageAccumulator((sessionId, text) => {
+      this.flushBackgroundMessage(sessionId, text);
+    });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -96,30 +102,31 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((msg: FromWebview) => {
       void this.handleFromWebview(msg);
     });
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) this.view = undefined;
+      // Keep pending debounce timers alive long enough to persist their owning
+      // session. Flushing here would split a delayed response on panel reload.
+    });
 
     // Route session updates to the webview
     this.session.onUpdate((event) => {
       if (event.backgroundProcess) this.updateBackgroundProcess(event.session_id, event.backgroundProcess);
-      const activeAcpSessionId = this.store.getAcpSessionId();
-      if (event.background && event.session_id !== activeAcpSessionId) {
-        if (event.text) this.store.addAgentMessageByAcpSessionId(event.session_id, event.text);
-        this.broadcastSessions(this.store);
+      if (event.background) {
+        // ACP can deliver a delayed response as many token-sized chunks after
+        // session/prompt has returned. Coalesce by owning session before one
+        // render/persist operation; treating each chunk as a complete message
+        // produces one word per block and corrupts restored history.
+        if (event.text) {
+          const notificationId = event.backgroundProcess?.id ?? event.session_id;
+          this.backgroundMessages.push(event.session_id, event.text, notificationId);
+        }
         return;
       }
       if (event.text) {
         // Convert MEDIA:/path references to webview-safe img URIs
         const converted = this.convertMediaPaths(event.text, webviewView.webview);
-        if (event.background) {
-          // A post-prompt ACP notification is a complete standalone message:
-          // render and persist it immediately instead of contaminating the
-          // next normal turn's streaming buffers.
-          this.store.addTurnMessages([], event.text);
-          this.post({ type: 'backgroundNotification', text: converted });
-          this.broadcastSessions(this.store);
-        } else {
-          this.lastTurnText += event.text;
-          this.post({ type: 'append', text: converted });
-        }
+        this.lastTurnText += event.text;
+        this.post({ type: 'append', text: converted });
       }
       if (event.thinkingText) {
         this.post({ type: 'thinking', text: event.thinkingText });
@@ -198,6 +205,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   post(msg: ToWebview): void {
     this.view?.webview.postMessage(msg);
+  }
+
+  dispose(): void {
+    this.view = undefined;
+    this.backgroundMessages.dispose();
+  }
+
+  private flushBackgroundMessage(acpSessionId: string, text: string): void {
+    const view = this.view;
+    routeBackgroundMessage({
+      sessionId: acpSessionId,
+      activeSessionId: this.store.getAcpSessionId(),
+      text,
+      canRender: view !== undefined,
+      persistActive: message => this.store.addTurnMessages([], message),
+      persistBySession: (sessionId, message) => { this.store.addAgentMessageByAcpSessionId(sessionId, message); },
+      render: message => {
+        if (!view) return;
+        const converted = this.convertMediaPaths(message, view.webview);
+        view.webview.postMessage({ type: 'backgroundNotification', text: converted });
+      },
+      broadcast: () => this.broadcastSessions(this.store),
+    });
   }
 
   private updateBackgroundProcess(acpSessionId: string, process: BackgroundProcessState): void {
@@ -470,6 +500,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     try {
+      // Bind ACP ownership before session/prompt can emit explicit background
+      // notifications on the first turn of a newly-created chat.
+      await bindPromptSession(this.session, this.store, cwd);
       await this.session.sendPrompt(prompt, cwd);
     } catch (err) {
       const msg = String(err);
