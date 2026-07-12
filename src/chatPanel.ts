@@ -12,7 +12,7 @@ import { SessionStore } from './sessionStore';
 import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
-import type { StoredMessage, ToWebview, FromWebview } from './types';
+import type { BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'hermes.chatView';
@@ -22,6 +22,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private messageQueue: string[] = [];
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
+  private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
 
   private readonly store: SessionStore;
   private readonly modelGroups: ModelMenuGroup[] = loadHermesModelGroups();
@@ -85,6 +86,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     // Route session updates to the webview
     this.session.onUpdate((event) => {
+      if (event.backgroundProcess) this.updateBackgroundProcess(event.session_id, event.backgroundProcess);
+      const activeAcpSessionId = this.store.getAcpSessionId();
+      if (event.background && event.session_id !== activeAcpSessionId) {
+        if (event.text) this.store.addAgentMessageByAcpSessionId(event.session_id, event.text);
+        this.broadcastSessions(this.store);
+        return;
+      }
       if (event.text) {
         // Convert MEDIA:/path references to webview-safe img URIs
         const converted = this.convertMediaPaths(event.text, webviewView.webview);
@@ -177,6 +185,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   post(msg: ToWebview): void {
     this.view?.webview.postMessage(msg);
+  }
+
+  private updateBackgroundProcess(acpSessionId: string, process: BackgroundProcessState): void {
+    let processes = this.backgroundProcessesBySession.get(acpSessionId);
+    if (!processes) {
+      processes = new Map<string, BackgroundProcessState>();
+      this.backgroundProcessesBySession.set(acpSessionId, processes);
+    }
+    if (process.status === 'running') processes.set(process.id, process);
+    else processes.delete(process.id);
+    if (processes.size === 0) this.backgroundProcessesBySession.delete(acpSessionId);
+    if (this.store.getAcpSessionId() === acpSessionId) this.showBackgroundProcesses(acpSessionId);
+  }
+
+  private showBackgroundProcesses(acpSessionId?: string): void {
+    const processes = acpSessionId ? this.backgroundProcessesBySession.get(acpSessionId) : undefined;
+    this.post({ type: 'statusBar', backgroundProcesses: processes ? [...processes.values()] : [] });
   }
 
   private saveTurnToSession(): void {
@@ -272,6 +297,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.lastTurnTools = [];
       this.session.reset();
       this.store.createSession('new session');
+      this.showBackgroundProcesses();
       this.post({ type: 'clear' });
       this.broadcastSessions(this.store);
 
@@ -284,6 +310,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.lastTurnText = '';
       this.lastTurnTools = [];
       this.session.reset();
+      this.showBackgroundProcesses(target.acpSessionId);
       if (target.acpSessionId) {
         this.session.setStoredSessionId(target.acpSessionId);
         this.log(`[session] will attempt resume of ACP session ${target.acpSessionId}`);

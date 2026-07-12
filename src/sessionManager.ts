@@ -29,7 +29,7 @@ import type { SessionUpdateEvent, SessionUpdateHandler } from './types';
 import {
   extractTextContent, deduplicateChunk,
   parseToolCall, parseToolCallUpdate,
-  parseUsageUpdate, parseSessionInfoUpdate,
+  parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta,
 } from './protocol';
 
 export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
@@ -229,12 +229,16 @@ export class SessionManager {
     if (!this.updateHandler) return;
 
     const session_id = params.sessionId as string;
-    if (!session_id || session_id !== this.sessionId) {
-      this.log(`[session] ignored update for inactive session ${session_id || '(missing)'}`);
-      return;
-    }
     const update = params.update as Record<string, unknown> | undefined;
-    if (!update) return;
+    if (!session_id || !update) return;
+    if (session_id !== this.sessionId) {
+      const meta = update['_meta'] as Record<string, unknown> | undefined;
+      const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
+      if (hermesMeta?.backgroundNotification !== true) {
+        this.log(`[session] ignored update for inactive session ${session_id}`);
+        return;
+      }
+    }
 
     const kind = update.sessionUpdate as string;
     const event: SessionUpdateEvent = { session_id };
@@ -249,6 +253,7 @@ export class SessionManager {
         const isBackground = hermesMeta?.backgroundNotification === true
           || (!this.promptActive && !this.replayActive);
         event.background = isBackground;
+        event.backgroundProcess = parseBackgroundProcessMeta(update);
         if (isBackground) {
           event.text = text;
           break;
@@ -295,6 +300,7 @@ export class SessionManager {
         event.toolCallId = parsed.toolCallId;
         event.toolStatus = parsed.status;
         event.toolTitle = ''; // signal: update, not new call
+        if (parsed.backgroundProcess) event.backgroundProcess = parsed.backgroundProcess;
         if (parsed.todoState) {
           event.todoState = parsed.todoState;
           this.log(`[session] todo update: ${parsed.todoState.todos.length} items`);
