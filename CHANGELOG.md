@@ -6,6 +6,12 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.4] — 2026-07-12
+
+### Added
+
+- Persistent per-session background-work indicator driven by terminal/process lifecycle results and structured Hermes ACP completion metadata.
+
 ## [3.2.3] — 2026-07-11
 
 ### Fixed

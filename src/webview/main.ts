@@ -55,6 +55,7 @@ const emptyState       = document.getElementById('empty-state') as HTMLDivElemen
 const sessionPicker    = document.getElementById('session-picker') as HTMLDivElement;
 const logoMark         = document.getElementById('logo-mark')!;
 const todoOverlay      = document.getElementById('todo-overlay')!;
+const backgroundProcessStatus = document.getElementById('background-process-status')!;
 const skillsBtn        = document.getElementById('skills-btn') as HTMLButtonElement;
 const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElement;
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
@@ -497,6 +498,7 @@ window.addEventListener('message', (e: MessageEvent) => {
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       setBusy(false);
       statusContextEl.textContent = ''; statusContextEl.className = '';
+      backgroundProcessStatus.className = ''; backgroundProcessStatus.innerHTML = '';
       break;
 
     case 'statusBar': {
@@ -506,6 +508,21 @@ window.addEventListener('message', (e: MessageEvent) => {
         S.selectedSkillNames = new Set(msg.selectedSkills);
         skillsBtn.classList.toggle('has-skills', S.selectedSkillNames.size > 0);
         skillsBtn.textContent = S.selectedSkillNames.size > 0 ? `✦${S.selectedSkillNames.size}` : '✦';
+      }
+      if (msg.backgroundProcesses !== undefined) {
+        const processes = msg.backgroundProcesses;
+        if (processes.length > 0) {
+          const ids = processes.map(process => process.id).join(', ');
+          backgroundProcessStatus.className = 'active';
+          backgroundProcessStatus.replaceChildren();
+          const dot = document.createElement('span'); dot.className = 'process-dot';
+          const label = document.createElement('span'); label.className = 'process-label'; label.textContent = 'Background work active';
+          const idList = document.createElement('span'); idList.className = 'process-ids'; idList.textContent = ids;
+          backgroundProcessStatus.append(dot, label, idList);
+        } else {
+          backgroundProcessStatus.className = '';
+          backgroundProcessStatus.innerHTML = '';
+        }
       }
       if (msg.todoState && typeof msg.todoState === 'object') {
         const state = msg.todoState as { todos?: TodoItem[] };

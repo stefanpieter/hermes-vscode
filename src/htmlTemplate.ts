@@ -122,6 +122,7 @@ ${CSS_TEMPLATE}
       </div>
     </div>
   </div>
+  <div id="background-process-status"></div>
   <div id="todo-overlay"></div>
   <div id="input-drag"></div>
   <div id="composer">
@@ -510,6 +511,25 @@ const CSS_TEMPLATE = /* css */ `
       color: var(--vscode-errorForeground);
       font-size: 0.85em;
     }
+
+
+    #background-process-status {
+      display: none; flex-shrink: 0;
+      margin: 0 8px 4px; padding: 6px 10px;
+      border: 1px solid var(--gold-border);
+      border-radius: 8px;
+      background: var(--gold-subtle);
+      color: var(--vscode-foreground);
+      font-family: var(--ui-font); font-size: 0.78em;
+    }
+    #background-process-status.active { display: flex; align-items: center; gap: 7px; }
+    #background-process-status .process-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--gold);
+      box-shadow: 0 0 7px var(--gold-dim); animation: process-pulse 1.5s ease-in-out infinite;
+    }
+    #background-process-status .process-label { font-weight: 600; }
+    #background-process-status .process-ids { color: var(--vscode-descriptionForeground); }
+    @keyframes process-pulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
 
     /* ── Todo overlay ──────────────────────────────── */
     /* Rendered as a card anchored directly above the composer. Matches the

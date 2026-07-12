@@ -43,10 +43,17 @@ export interface TodoState {
 
 // ── ACP Session Events ───────────────────────────────
 
+export interface BackgroundProcessState {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  exitCode?: number;
+}
+
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
   background?: boolean;
+  backgroundProcess?: BackgroundProcessState;
   thinkingText?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -81,6 +88,7 @@ export interface ToWebview {
   toolKind?: string;
   toolLocations?: string[];
   todoState?: TodoState;
+  backgroundProcesses?: BackgroundProcessState[];
   status?: string;
   active?: boolean;
   queued?: number;

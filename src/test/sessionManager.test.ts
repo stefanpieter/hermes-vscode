@@ -31,13 +31,17 @@ class FakeClient {
 
   notify(): void {}
 
-  emit(sessionId: string, text: string, background = false): void {
+  emitUpdate(sessionId: string, update: Record<string, unknown>): void {
+    this.notificationHandler?.('session/update', { sessionId, update });
+  }
+
+  emit(sessionId: string, text: string, background = false, process?: Record<string, unknown>): void {
     this.notificationHandler?.('session/update', {
       sessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text },
-        ...(background ? { _meta: { hermes: { backgroundNotification: true } } } : {}),
+        ...(background ? { _meta: { hermes: { backgroundNotification: true, ...(process ? { process } : {}) } } } : {}),
       },
     });
   }
@@ -113,4 +117,43 @@ test('accepts session/load replay without treating it as a background notificati
   assert.equal(sessionId, 'stored-session');
   assert.equal(events.at(-1)?.text, 'replayed history');
   assert.equal(events.at(-1)?.background, false);
+});
+
+
+test('emits running process lifecycle from a terminal background tool result', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'tool-1',
+    status: 'completed',
+    rawOutput: JSON.stringify({ output: 'Background process started', session_id: 'proc_live123' }),
+  });
+  assert.deepEqual(events.at(-1)?.backgroundProcess, { id: 'proc_live123', status: 'running' });
+});
+
+test('emits authoritative process completion from Hermes ACP metadata', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  client.emit('active-session', 'finished', true, {
+    id: 'proc_live123', status: 'completed', event: 'completion', exitCode: 0,
+  });
+  assert.deepEqual(events.at(-1)?.backgroundProcess, {
+    id: 'proc_live123', status: 'completed', exitCode: 0,
+  });
+});
+
+
+test('allows explicitly tagged completion for an inactive ACP session', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  client.emit('inactive-session', 'hidden completion', true, {
+    id: 'proc_hidden123', status: 'completed', event: 'completion', exitCode: 0,
+  });
+  assert.equal(events.at(-1)?.session_id, 'inactive-session');
+  assert.equal(events.at(-1)?.background, true);
+  assert.equal(events.at(-1)?.text, 'hidden completion');
 });
