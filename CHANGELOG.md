@@ -11,6 +11,7 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 ### Fixed
 
 - ACP permission approvals now return the protocol-required nested outcome object, so approved file edits are no longer interpreted as denials by Hermes with `agent-client-protocol` 0.9.0.
+- ACP restarts now isolate child-process generations, so a stopped process's delayed exit or permission reply cannot detach, reject, or write into its replacement.
 - Command Palette profile changes now restart a running ACP client immediately, keeping the displayed profile aligned with the process that is actually running.
 - Switching sessions now restores the target session's background-process indicator after clearing the previous view.
 
