@@ -6,6 +6,12 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.7] — 2026-07-14
+
+### Fixed
+
+- ACP permission approvals now return the protocol-required nested outcome object, so approved file edits are no longer interpreted as denials by Hermes with `agent-client-protocol` 0.9.0.
+
 ## [3.2.5] — 2026-07-12
 
 ### Added

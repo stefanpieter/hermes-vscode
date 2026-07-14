@@ -8,6 +8,7 @@ import { normalizeHermesProfile } from './acpLaunchArgs';
 import { buildProfileMenuItems, isProfileRestartRequired, parseHermesProfileList, profileDisplayName } from './profileUi';
 import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
+import { selectedPermissionResponse } from './permissionResponse';
 
 const DEFAULT_SONNET_MODEL = 'claude-sonnet-4-6';
 const APPROVED_BINARIES_KEY = 'hermes.approvedBinaries';
@@ -306,12 +307,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     if (choice === allow && allowOptionId) {
       outputChannel.appendLine('[security] permission granted once');
-      return { outcome: 'selected', optionId: allowOptionId };
+      return selectedPermissionResponse(allowOptionId);
     }
 
     if (denyOptionId) {
       outputChannel.appendLine('[security] permission denied');
-      return { outcome: 'selected', optionId: denyOptionId };
+      return selectedPermissionResponse(denyOptionId);
     }
 
     throw new Error('Permission denied by user');
