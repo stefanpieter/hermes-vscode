@@ -106,16 +106,16 @@ export class AcpClient extends EventEmitter {
       this.emit('log', `[acp] spawn error: ${err.message}`);
       this.proc = null;
       this.buffer = '';
-      this.emit('exit', -1);
       this.rejectPending(new Error(`Failed to start hermes: ${err.message}`));
+      this.emit('exit', -1);
     });
 
     proc.on('exit', (code) => {
       if (this.proc !== proc) return;
       this.proc = null;
       this.buffer = '';
-      this.emit('exit', code);
       this.rejectPending(new Error(`hermes acp exited (code ${code})`));
+      this.emit('exit', code);
     });
 
     // Handshake — protocolVersion is integer 1, params use camelCase
