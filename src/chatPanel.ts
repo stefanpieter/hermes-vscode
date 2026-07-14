@@ -15,6 +15,7 @@ import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { bindPromptSession } from './promptSessionBinding';
+import { sessionSwitchUiMessages } from './sessionSwitchUi';
 import type { ProfileMenuItem } from './profileUi';
 import type { BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
 
@@ -243,8 +244,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private showBackgroundProcesses(acpSessionId?: string): void {
+    this.post({ type: 'statusBar', backgroundProcesses: this.backgroundProcessesFor(acpSessionId) });
+  }
+
+  private backgroundProcessesFor(acpSessionId?: string): BackgroundProcessState[] {
     const processes = acpSessionId ? this.backgroundProcessesBySession.get(acpSessionId) : undefined;
-    this.post({ type: 'statusBar', backgroundProcesses: processes ? [...processes.values()] : [] });
+    return processes ? [...processes.values()] : [];
   }
 
   private saveTurnToSession(): void {
@@ -340,8 +345,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.lastTurnTools = [];
       this.session.reset();
       this.store.createSession('new session');
-      this.showBackgroundProcesses();
       this.post({ type: 'clear' });
+      this.showBackgroundProcesses();
       this.broadcastSessions(this.store);
 
     } else if (msg.type === 'switchSession' && msg.sessionId) {
@@ -353,14 +358,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.lastTurnText = '';
       this.lastTurnTools = [];
       this.session.reset();
-      this.showBackgroundProcesses(target.acpSessionId);
       if (target.acpSessionId) {
         this.session.setStoredSessionId(target.acpSessionId);
         this.log(`[session] will attempt resume of ACP session ${target.acpSessionId}`);
       }
 
-      this.post({ type: 'clear' });
-      this.post({ type: 'statusBar', sessionTitle: target.title });
+      for (const update of sessionSwitchUiMessages(
+        target.title,
+        this.backgroundProcessesFor(target.acpSessionId),
+      )) this.post(update);
       this.broadcastSessions(this.store);
 
       if (target.messages.length > 0) {
