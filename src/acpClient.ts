@@ -85,36 +85,37 @@ export class AcpClient extends EventEmitter {
     const args = buildHermesAcpArgs(this.profile);
     this.activeProfile = this.profile;
     this.emit('log', `[acp] spawn ${this.hermesPath} ${args.join(' ')}`);
-    this.proc = spawn(this.hermesPath, args, {
+    const proc = spawn(this.hermesPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...this.envOverrides },
     });
+    this.proc = proc;
 
-    this.proc.stdout!.setEncoding('utf8');
-    this.proc.stdout!.on('data', (chunk: string) => this.onData(chunk));
-
-    this.proc.stderr!.setEncoding('utf8');
-    this.proc.stderr!.on('data', (line: string) => {
-      this.emit('log', line.trimEnd());
+    proc.stdout!.setEncoding('utf8');
+    proc.stdout!.on('data', (chunk: string) => {
+      if (this.proc === proc) this.onData(chunk, proc);
     });
 
-    this.proc.on('error', (err) => {
+    proc.stderr!.setEncoding('utf8');
+    proc.stderr!.on('data', (line: string) => {
+      if (this.proc === proc) this.emit('log', line.trimEnd());
+    });
+
+    proc.on('error', (err) => {
+      if (this.proc !== proc) return;
       this.emit('log', `[acp] spawn error: ${err.message}`);
-      this.emit('exit', -1);
       this.proc = null;
-      for (const [, req] of this.pending) {
-        req.reject(new Error(`Failed to start hermes: ${err.message}`));
-      }
-      this.pending.clear();
+      this.buffer = '';
+      this.emit('exit', -1);
+      this.rejectPending(new Error(`Failed to start hermes: ${err.message}`));
     });
 
-    this.proc.on('exit', (code) => {
-      this.emit('exit', code);
+    proc.on('exit', (code) => {
+      if (this.proc !== proc) return;
       this.proc = null;
-      for (const [, req] of this.pending) {
-        req.reject(new Error(`hermes acp exited (code ${code})`));
-      }
-      this.pending.clear();
+      this.buffer = '';
+      this.emit('exit', code);
+      this.rejectPending(new Error(`hermes acp exited (code ${code})`));
     });
 
     // Handshake — protocolVersion is integer 1, params use camelCase
@@ -122,8 +123,12 @@ export class AcpClient extends EventEmitter {
   }
 
   stop(): void {
-    this.proc?.kill();
+    const proc = this.proc;
+    if (!proc) return;
     this.proc = null;
+    this.buffer = '';
+    this.rejectPending(new Error('hermes acp stopped'));
+    proc.kill();
   }
 
   async call(method: string, params: unknown): Promise<unknown> {
@@ -151,21 +156,23 @@ export class AcpClient extends EventEmitter {
     this.proc.stdin!.write(message);
   }
 
-  private reply(id: number | string, result: unknown): void {
+  private reply(proc: ChildProcess, id: number | string, result: unknown): void {
+    if (this.proc !== proc) return;
     const message = JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n';
-    this.proc?.stdin?.write(message);
+    proc.stdin?.write(message);
   }
 
-  private replyError(id: number | string, code: number, message: string): void {
+  private replyError(proc: ChildProcess, id: number | string, code: number, message: string): void {
+    if (this.proc !== proc) return;
     const payload = JSON.stringify({
       jsonrpc: '2.0',
       id,
       error: { code, message },
     }) + '\n';
-    this.proc?.stdin?.write(payload);
+    proc.stdin?.write(payload);
   }
 
-  private onData(chunk: string): void {
+  private onData(chunk: string, proc: ChildProcess): void {
     this.buffer += chunk;
     const lines = this.buffer.split('\n');
     this.buffer = lines.pop() ?? '';
@@ -177,7 +184,7 @@ export class AcpClient extends EventEmitter {
         this.emit('log', `[acp raw] ${trimmed.slice(0, 500)}`);
       }
       try {
-        this.dispatch(JSON.parse(trimmed));
+        this.dispatch(JSON.parse(trimmed), proc);
       } catch {
         this.emit('log', '[acp] failed to parse JSON line');
         // Ignore malformed lines
@@ -185,10 +192,10 @@ export class AcpClient extends EventEmitter {
     }
   }
 
-  private dispatch(msg: Record<string, unknown>): void {
+  private dispatch(msg: Record<string, unknown>, proc: ChildProcess): void {
     if (msg.id !== undefined && msg.method) {
       // Incoming request from agent (e.g. session/request_permission)
-      this.handleIncomingRequest(msg);
+      this.handleIncomingRequest(msg, proc);
     } else if (msg.id !== undefined) {
       // Response to one of our call()s
       const pending = this.pending.get(msg.id as number);
@@ -224,17 +231,22 @@ export class AcpClient extends EventEmitter {
     }
   }
 
-  private handleIncomingRequest(msg: Record<string, unknown>): void {
+  private rejectPending(error: Error): void {
+    for (const [, request] of this.pending) request.reject(error);
+    this.pending.clear();
+  }
+
+  private handleIncomingRequest(msg: Record<string, unknown>, proc: ChildProcess): void {
     const id = msg.id as number | string;
     const method = msg.method as string;
     const params = msg.params;
 
     if (this.requestHandler) {
       this.requestHandler(method, params)
-        .then((result) => this.reply(id, result))
-        .catch((err: Error) => this.replyError(id, -32603, err.message));
+        .then((result) => this.reply(proc, id, result))
+        .catch((err: Error) => this.replyError(proc, id, -32603, err.message));
     } else {
-      this.replyError(id, -32601, `No handler for ${method}`);
+      this.replyError(proc, id, -32601, `No handler for ${method}`);
     }
   }
 }
