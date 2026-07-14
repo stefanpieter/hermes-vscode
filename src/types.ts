@@ -4,6 +4,7 @@
  */
 
 import type { SkillGroup } from './skillCatalog';
+import type { ProfileMenuItem } from './profileUi';
 
 // ── Session & History ────────────────────────────────
 
@@ -42,9 +43,17 @@ export interface TodoState {
 
 // ── ACP Session Events ───────────────────────────────
 
+export interface BackgroundProcessState {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  exitCode?: number;
+}
+
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
+  background?: boolean;
+  backgroundProcess?: BackgroundProcessState;
   thinkingText?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -68,9 +77,9 @@ export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
 
 export interface ToWebview {
   type:
-    | 'append' | 'thinking' | 'toolCall' | 'done'
+    | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'clear' | 'busy'
-    | 'statusBar' | 'sessionList' | 'loadHistory';
+    | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;
   toolName?: string;
   toolStatus?: string;
@@ -79,6 +88,7 @@ export interface ToWebview {
   toolKind?: string;
   toolLocations?: string[];
   todoState?: TodoState;
+  backgroundProcesses?: BackgroundProcessState[];
   status?: string;
   active?: boolean;
   queued?: number;
@@ -96,6 +106,10 @@ export interface ToWebview {
   selectedSkills?: string[];
   skillGroups?: SkillGroup[];
   contextAnnotation?: string;
+  profile?: string;
+  profiles?: string[];
+  profileItems?: ProfileMenuItem[];
+  restartRequired?: boolean;
 }
 
 export interface FromWebview {
@@ -103,7 +117,8 @@ export interface FromWebview {
     | 'send' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
-    | 'toggleSkill' | 'renameSession' | 'deleteSession';
+    | 'toggleSkill' | 'renameSession' | 'deleteSession'
+    | 'selectProfile' | 'customProfile' | 'restartHermes';
   text?: string;
   sessionId?: string;
   model?: string;

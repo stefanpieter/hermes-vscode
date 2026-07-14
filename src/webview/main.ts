@@ -14,6 +14,7 @@ import {
 } from './renderers';
 import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
+  buildProfileMenu, setupProfileHandlers,
   buildSkillsMenu, setupSkillsHandlers, updateStatusBar,
 } from './menus';
 
@@ -45,19 +46,23 @@ const ctxBar           = document.getElementById('ctx-bar') as HTMLDivElement;
 const ctxBarFresh      = document.getElementById('ctx-bar-fresh') as HTMLDivElement;
 const modelBtnHeader   = document.getElementById('model-btn-header') as HTMLButtonElement;
 const modelMenu        = document.getElementById('model-menu') as HTMLDivElement;
+const profileBtnHeader = document.getElementById('profile-btn-header') as HTMLButtonElement;
+const profileLabelEl   = document.getElementById('profile-label') as HTMLSpanElement;
+const profileMenu      = document.getElementById('profile-menu') as HTMLDivElement;
 const overflowBtn      = document.getElementById('overflow-btn') as HTMLButtonElement;
 const overflowMenu     = document.getElementById('overflow-menu') as HTMLDivElement;
 const emptyState       = document.getElementById('empty-state') as HTMLDivElement;
 const sessionPicker    = document.getElementById('session-picker') as HTMLDivElement;
 const logoMark         = document.getElementById('logo-mark')!;
 const todoOverlay      = document.getElementById('todo-overlay')!;
+const backgroundProcessStatus = document.getElementById('background-process-status')!;
 const skillsBtn        = document.getElementById('skills-btn') as HTMLButtonElement;
 const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElement;
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
 
-const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, cmdArgPopover };
+const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profileMenu, cmdArgPopover };
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
@@ -203,6 +208,13 @@ modelMenu.addEventListener('click', (e) => {
   if (!opt?.dataset.command) return;
   closeFn(); vscode.postMessage({ type: 'switchModel', model: opt.dataset.command });
 });
+
+// Profile switcher
+profileBtnHeader.addEventListener('click', (e) => {
+  e.stopPropagation(); const open = profileMenu.style.display !== 'none';
+  closeFn(); if (!open) profileMenu.style.display = 'block';
+});
+setupProfileHandlers(profileMenu, vscode, closeFn);
 
 // Slash-command menu (hybrid dispatch: execute / confirm / prompt-for-arg)
 function hideCmdArg(): void {
@@ -370,6 +382,13 @@ window.addEventListener('message', (e: MessageEvent) => {
       scheduleFlush();
       break;
 
+    case 'backgroundNotification': {
+      const notification = appendMessage(messagesEl, 'agent', msg.text ?? '');
+      renderMarkdown(notification, msg.text ?? '');
+      autoScroll();
+      break;
+    }
+
     case 'thinking':
       if (!S.thinkingStatusEl) {
         document.getElementById('waiting')?.remove();
@@ -479,6 +498,7 @@ window.addEventListener('message', (e: MessageEvent) => {
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       setBusy(false);
       statusContextEl.textContent = ''; statusContextEl.className = '';
+      backgroundProcessStatus.className = ''; backgroundProcessStatus.innerHTML = '';
       break;
 
     case 'statusBar': {
@@ -488,6 +508,21 @@ window.addEventListener('message', (e: MessageEvent) => {
         S.selectedSkillNames = new Set(msg.selectedSkills);
         skillsBtn.classList.toggle('has-skills', S.selectedSkillNames.size > 0);
         skillsBtn.textContent = S.selectedSkillNames.size > 0 ? `✦${S.selectedSkillNames.size}` : '✦';
+      }
+      if (msg.backgroundProcesses !== undefined) {
+        const processes = msg.backgroundProcesses;
+        if (processes.length > 0) {
+          const ids = processes.map(process => process.id).join(', ');
+          backgroundProcessStatus.className = 'active';
+          backgroundProcessStatus.replaceChildren();
+          const dot = document.createElement('span'); dot.className = 'process-dot';
+          const label = document.createElement('span'); label.className = 'process-label'; label.textContent = 'Background work active';
+          const idList = document.createElement('span'); idList.className = 'process-ids'; idList.textContent = ids;
+          backgroundProcessStatus.append(dot, label, idList);
+        } else {
+          backgroundProcessStatus.className = '';
+          backgroundProcessStatus.innerHTML = '';
+        }
       }
       if (msg.todoState && typeof msg.todoState === 'object') {
         const state = msg.todoState as { todos?: TodoItem[] };
@@ -515,6 +550,19 @@ window.addEventListener('message', (e: MessageEvent) => {
           attachChip.style.display = 'none'; attachChip.innerHTML = '';
         }
       }
+      break;
+    }
+
+    case 'profileList': {
+      S.currentProfile = msg.profile ?? '';
+      S.profileRestartRequired = !!msg.restartRequired;
+      const activeProfileItem = msg.profileItems?.find(item => item.active);
+      profileLabelEl.textContent = activeProfileItem?.label ?? (S.currentProfile || 'Default');
+      profileBtnHeader.classList.toggle('restart-required', S.profileRestartRequired);
+      profileBtnHeader.title = S.profileRestartRequired
+        ? 'Switch Hermes profile (restart required to apply current selection)'
+        : 'Switch Hermes profile';
+      buildProfileMenu(profileMenu, msg.profileItems ?? [], S.profileRestartRequired);
       break;
     }
 

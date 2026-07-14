@@ -12,9 +12,22 @@ import { SessionStore } from './sessionStore';
 import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
-import type { StoredMessage, ToWebview, FromWebview } from './types';
+import { profileDisplayName } from './profileUi';
+import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
+import { bindPromptSession } from './promptSessionBinding';
+import type { ProfileMenuItem } from './profileUi';
+import type { BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
 
-export class ChatPanelProvider implements vscode.WebviewViewProvider {
+export interface ProfileController {
+  currentProfile(): string;
+  profileItems(): ProfileMenuItem[];
+  restartRequired(): boolean;
+  selectProfile(profile: string): Promise<boolean>;
+  customProfile(): Promise<boolean>;
+  restartHermes(): Promise<void>;
+}
+
+export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewId = 'hermes.chatView';
 
   private view?: vscode.WebviewView;
@@ -22,6 +35,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private messageQueue: string[] = [];
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
+  private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
+  private readonly backgroundMessages: BackgroundMessageAccumulator;
 
   private readonly store: SessionStore;
   private readonly modelGroups: ModelMenuGroup[] = loadHermesModelGroups();
@@ -39,10 +54,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly hermesVersion: string = '',
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void = () => {},
+    private readonly profileController?: ProfileController,
   ) {
     this.mediaRoot = path.join(this.context.globalStorageUri.fsPath, 'media');
     fs.mkdirSync(this.mediaRoot, { recursive: true });
     this.store = new SessionStore(context);
+    this.backgroundMessages = new BackgroundMessageAccumulator((sessionId, text) => {
+      this.flushBackgroundMessage(sessionId, text);
+    });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -72,6 +91,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     // Emit initial state
     setTimeout(() => {
       this.post({ type: 'statusBar', model: this.initialModel, version: this.hermesVersion, skillGroups: this.skillGroups });
+      this.broadcastProfileState();
       this.broadcastSessions(this.store);
       // Restore last session's history into the view
       if (active && active.messages.length > 0) {
@@ -82,9 +102,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((msg: FromWebview) => {
       void this.handleFromWebview(msg);
     });
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) this.view = undefined;
+      // Keep pending debounce timers alive long enough to persist their owning
+      // session. Flushing here would split a delayed response on panel reload.
+    });
 
     // Route session updates to the webview
     this.session.onUpdate((event) => {
+      if (event.backgroundProcess) this.updateBackgroundProcess(event.session_id, event.backgroundProcess);
+      if (event.background) {
+        // ACP can deliver a delayed response as many token-sized chunks after
+        // session/prompt has returned. Coalesce by owning session before one
+        // render/persist operation; treating each chunk as a complete message
+        // produces one word per block and corrupts restored history.
+        if (event.text) {
+          const notificationId = event.backgroundProcess?.id ?? event.session_id;
+          this.backgroundMessages.push(event.session_id, event.text, notificationId);
+        }
+        return;
+      }
       if (event.text) {
         // Convert MEDIA:/path references to webview-safe img URIs
         const converted = this.convertMediaPaths(event.text, webviewView.webview);
@@ -168,6 +205,46 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   post(msg: ToWebview): void {
     this.view?.webview.postMessage(msg);
+  }
+
+  dispose(): void {
+    this.view = undefined;
+    this.backgroundMessages.dispose();
+  }
+
+  private flushBackgroundMessage(acpSessionId: string, text: string): void {
+    const view = this.view;
+    routeBackgroundMessage({
+      sessionId: acpSessionId,
+      activeSessionId: this.store.getAcpSessionId(),
+      text,
+      canRender: view !== undefined,
+      persistActive: message => this.store.addTurnMessages([], message),
+      persistBySession: (sessionId, message) => { this.store.addAgentMessageByAcpSessionId(sessionId, message); },
+      render: message => {
+        if (!view) return;
+        const converted = this.convertMediaPaths(message, view.webview);
+        view.webview.postMessage({ type: 'backgroundNotification', text: converted });
+      },
+      broadcast: () => this.broadcastSessions(this.store),
+    });
+  }
+
+  private updateBackgroundProcess(acpSessionId: string, process: BackgroundProcessState): void {
+    let processes = this.backgroundProcessesBySession.get(acpSessionId);
+    if (!processes) {
+      processes = new Map<string, BackgroundProcessState>();
+      this.backgroundProcessesBySession.set(acpSessionId, processes);
+    }
+    if (process.status === 'running') processes.set(process.id, process);
+    else processes.delete(process.id);
+    if (processes.size === 0) this.backgroundProcessesBySession.delete(acpSessionId);
+    if (this.store.getAcpSessionId() === acpSessionId) this.showBackgroundProcesses(acpSessionId);
+  }
+
+  private showBackgroundProcesses(acpSessionId?: string): void {
+    const processes = acpSessionId ? this.backgroundProcessesBySession.get(acpSessionId) : undefined;
+    this.post({ type: 'statusBar', backgroundProcesses: processes ? [...processes.values()] : [] });
   }
 
   private saveTurnToSession(): void {
@@ -263,6 +340,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.lastTurnTools = [];
       this.session.reset();
       this.store.createSession('new session');
+      this.showBackgroundProcesses();
       this.post({ type: 'clear' });
       this.broadcastSessions(this.store);
 
@@ -275,6 +353,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       this.lastTurnText = '';
       this.lastTurnTools = [];
       this.session.reset();
+      this.showBackgroundProcesses(target.acpSessionId);
       if (target.acpSessionId) {
         this.session.setStoredSessionId(target.acpSessionId);
         this.log(`[session] will attempt resume of ACP session ${target.acpSessionId}`);
@@ -347,6 +426,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         this.broadcastSessions(this.store);
       }
 
+    } else if (msg.type === 'selectProfile') {
+      const nextProfile = msg.text ?? '';
+      this.log(`[ui] select profile ${profileDisplayName(nextProfile)}`);
+      const restarted = await this.profileController?.selectProfile(nextProfile);
+      if (restarted) this.post({ type: 'clear' });
+      this.broadcastProfileState();
+
+    } else if (msg.type === 'customProfile') {
+      this.log('[ui] custom profile');
+      const restarted = await this.profileController?.customProfile();
+      if (restarted) this.post({ type: 'clear' });
+      this.broadcastProfileState();
+
+    } else if (msg.type === 'restartHermes') {
+      this.log('[ui] restart Hermes for profile change');
+      await this.profileController?.restartHermes();
+      this.post({ type: 'clear' });
+      this.broadcastProfileState();
+
     } else if (msg.type === 'toggleSkill' && msg.text) {
       const idx = this.selectedSkills.indexOf(msg.text);
       if (idx >= 0) {
@@ -402,6 +500,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     try {
+      // Bind ACP ownership before session/prompt can emit explicit background
+      // notifications on the first turn of a newly-created chat.
+      await bindPromptSession(this.session, this.store, cwd);
       await this.session.sendPrompt(prompt, cwd);
     } catch (err) {
       const msg = String(err);
@@ -502,6 +603,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     return normalizedFile.startsWith(normalizedRoot) && allowedExt.has(path.extname(normalizedFile).toLowerCase());
   }
 
+
+  public refreshProfileState(): void {
+    this.broadcastProfileState();
+  }
+
+  private broadcastProfileState(): void {
+    if (!this.profileController) return;
+    const profile = this.profileController.currentProfile();
+    this.post({
+      type: 'profileList',
+      profile,
+      profileItems: this.profileController.profileItems(),
+      restartRequired: this.profileController.restartRequired(),
+    });
+  }
 
   private broadcastSessions(_store: SessionStore): void {
     this.post({

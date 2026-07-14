@@ -95,6 +95,17 @@ export class SessionStore {
     }
   }
 
+  addAgentMessageByAcpSessionId(acpSessionId: string, text: string): boolean {
+    const session = this.sessions.find(item => item.acpSessionId === acpSessionId);
+    if (!session || !text.trim()) return false;
+    session.messages.push({ role: 'agent', text });
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
+      session.messages = session.messages.slice(-MAX_MESSAGES_PER_SESSION);
+    }
+    this.persist();
+    return true;
+  }
+
   addTurnMessages(tools: StoredMessage[], agentText: string): void {
     const s = this.active();
     if (!s) return;

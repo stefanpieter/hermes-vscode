@@ -6,7 +6,7 @@
  * this module owns parsing (extracting fields from wire format).
  */
 
-import type { SessionUpdateEvent, TodoState } from './types';
+import type { BackgroundProcessState, SessionUpdateEvent, TodoState } from './types';
 
 type RawUpdate = Record<string, unknown>;
 
@@ -96,16 +96,62 @@ export interface ParsedToolCallUpdate {
   toolCallId?: string;
   status: string;
   todoState?: TodoState;
+  backgroundProcess?: BackgroundProcessState;
 }
 
-/** Parse a tool_call_update, checking for todo JSON in output. */
+/** Parse a Hermes terminal/process tool result into persistent process state. */
+export function parseBackgroundProcessFromToolUpdate(update: RawUpdate): BackgroundProcessState | undefined {
+  const rawOutput = update.rawOutput ?? update.raw_output;
+  let parsed: Record<string, unknown> | undefined;
+  if (rawOutput && typeof rawOutput === 'object') {
+    parsed = rawOutput as Record<string, unknown>;
+  } else if (typeof rawOutput === 'string') {
+    try {
+      const value = JSON.parse(rawOutput);
+      if (value && typeof value === 'object') parsed = value as Record<string, unknown>;
+    } catch { /* unrelated non-JSON tool output */ }
+  }
+  if (!parsed) return undefined;
+  const id = String(parsed.session_id ?? parsed.sessionId ?? '');
+  if (!/^proc_[A-Za-z0-9]+$/.test(id)) return undefined;
+  const output = String(parsed.output ?? '');
+  const rawStatus = String(parsed.status ?? '').toLowerCase();
+  const rawExitCode = parsed.exit_code ?? parsed.exitCode;
+  const exitCode = typeof rawExitCode === 'number' ? rawExitCode : undefined;
+  if (output.includes('Background process started') || rawStatus === 'running' || rawStatus === 'timeout') {
+    return { id, status: 'running' };
+  }
+  if (rawStatus === 'exited' || rawStatus === 'completed') {
+    return { id, status: exitCode === undefined || exitCode === 0 ? 'completed' : 'failed', ...(exitCode !== undefined ? { exitCode } : {}) };
+  }
+  if (['killed', 'lost', 'failed_start', 'failed', 'error'].includes(rawStatus)) {
+    return { id, status: 'failed', ...(exitCode !== undefined ? { exitCode } : {}) };
+  }
+  return undefined;
+}
+
+/** Parse structured Hermes metadata on an asynchronous ACP message. */
+export function parseBackgroundProcessMeta(update: RawUpdate): BackgroundProcessState | undefined {
+  const meta = update['_meta'] as Record<string, unknown> | undefined;
+  const hermes = meta?.hermes as Record<string, unknown> | undefined;
+  const process = hermes?.process as Record<string, unknown> | undefined;
+  if (!process) return undefined;
+  const id = String(process.id ?? '');
+  const status = String(process.status ?? '');
+  if (!/^proc_[A-Za-z0-9]+$/.test(id) || !['running', 'completed', 'failed'].includes(status)) return undefined;
+  const exitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
+  return { id, status: status as BackgroundProcessState['status'], ...(exitCode !== undefined ? { exitCode } : {}) };
+}
+
+/** Parse a tool_call_update, checking for todo and process JSON in output. */
 export function parseToolCallUpdate(update: RawUpdate): ParsedToolCallUpdate {
   const toolCallId = update.toolCallId as string | undefined;
   const status = (update.status as string) ?? 'completed';
 
   const todoState = extractTodoFromUpdate(update);
+  const backgroundProcess = parseBackgroundProcessFromToolUpdate(update);
 
-  return { toolCallId, status, todoState };
+  return { toolCallId, status, todoState, backgroundProcess };
 }
 
 // ── Todo detection ───────────────────────────────────
