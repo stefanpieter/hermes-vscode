@@ -2,7 +2,7 @@
   "name": "hermes-ai-agent",
   "displayName": "Hermes AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
-  "version": "3.2.7",
+  "version": "3.2.8",
   "publisher": "joaompfp",
   "author": "joao",
   "license": "MIT",
@@ -67,6 +67,10 @@
         "title": "Hermes: Select Profile"
       },
       {
+        "command": "hermes.selectEditApprovalMode",
+        "title": "Hermes: Select Edit Approval Mode"
+      },
+      {
         "command": "hermes.restartAgent",
         "title": "Hermes: Restart Agent"
       }
@@ -103,6 +107,22 @@
           "default": "",
           "scope": "machine-overridable",
           "description": "Optional Hermes profile to use for ACP sessions. Empty uses Hermes's current/default profile."
+        },
+        "hermes.editApprovalMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "accept_edits",
+            "dont_ask"
+          ],
+          "enumDescriptions": [
+            "Ask before every file edit.",
+            "Automatically allow workspace and temporary-file edits, while still asking for sensitive paths.",
+            "Automatically allow file edits for the session except sensitive paths."
+          ],
+          "default": "default",
+          "scope": "machine-overridable",
+          "description": "ACP file-edit approval mode. Change it with Hermes: Select Edit Approval Mode."
         },
         "hermes.debugLogs": {
           "type": "boolean",

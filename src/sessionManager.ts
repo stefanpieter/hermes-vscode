@@ -25,6 +25,7 @@
  */
 
 import { AcpClient } from './acpClient';
+import { EditApprovalModeId, normalizeEditApprovalMode } from './editApprovalMode';
 import type { SessionUpdateEvent, SessionUpdateHandler } from './types';
 import {
   extractTextContent, deduplicateChunk,
@@ -57,11 +58,16 @@ export class SessionManager {
   /** True while session/load is synchronously replaying persisted history. */
   private replayActive = false;
 
+  /** Preferred ACP edit mode, reapplied whenever a session is created or loaded. */
+  private editApprovalMode: EditApprovalModeId;
+
   constructor(
     private readonly client: AcpClient,
     private readonly log: (line: string) => void = () => {},
     private readonly permissionRequestHandler?: PermissionRequestHandler,
+    initialEditApprovalMode: EditApprovalModeId = 'default',
   ) {
+    this.editApprovalMode = normalizeEditApprovalMode(initialEditApprovalMode);
     client.onNotification((method, params) => {
       if (method === 'session/update') {
         this.handleUpdate(params as Record<string, unknown>);
@@ -94,6 +100,33 @@ export class SessionManager {
     return this.sessionId;
   }
 
+  getEditApprovalMode(): EditApprovalModeId {
+    return this.editApprovalMode;
+  }
+
+  async setEditApprovalMode(mode: EditApprovalModeId, cwd: string): Promise<void> {
+    const previousMode = this.editApprovalMode;
+    this.editApprovalMode = normalizeEditApprovalMode(mode);
+    try {
+      if (!this.sessionId) {
+        await this.ensureSession(cwd);
+        return;
+      }
+      await this.applyEditApprovalMode(this.sessionId);
+    } catch (err) {
+      this.editApprovalMode = previousMode;
+      throw err;
+    }
+  }
+
+  private async applyEditApprovalMode(sessionId: string): Promise<void> {
+    await this.client.call('session/set_mode', {
+      sessionId,
+      modeId: this.editApprovalMode,
+    });
+    this.log(`[session] edit approval mode ${this.editApprovalMode}`);
+  }
+
   async ensureSession(cwd: string): Promise<string> {
     if (this.sessionId) {
       this.log(`[session] reusing ${this.sessionId}`);
@@ -107,6 +140,7 @@ export class SessionManager {
     if (this.storedSessionId) {
       const storedId = this.storedSessionId;
       this.storedSessionId = null;
+      let loaded = false;
       try {
         this.log(`[session] attempting session/load ${storedId}`);
         // ACP requires history replay notifications before session/load returns.
@@ -121,16 +155,21 @@ export class SessionManager {
         });
         // Adapter returns null when session not found — load_session() → None
         if (result !== null && result !== undefined) {
+          loaded = true;
           this.log(`[session] resumed ${storedId}`);
-          return this.sessionId;
+        } else {
+          this.sessionId = null;
+          this.log(`[session] stored session ${storedId} not found on adapter, creating new`);
         }
-        this.sessionId = null;
-        this.log(`[session] stored session ${storedId} not found on adapter, creating new`);
       } catch (err) {
         this.sessionId = null;
         this.log(`[session] session/load failed (${err}), creating new`);
       } finally {
         this.replayActive = false;
+      }
+      if (loaded) {
+        await this.applyEditApprovalMode(storedId);
+        return storedId;
       }
       // Fall through to session/new
     }
@@ -144,6 +183,7 @@ export class SessionManager {
 
     this.sessionId = result.sessionId;
     this.log(`[session] created ${this.sessionId}`);
+    await this.applyEditApprovalMode(this.sessionId);
 
     // Emit initial model from session/new response
     const model = result.models?.currentModelId;

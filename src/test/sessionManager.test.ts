@@ -8,6 +8,8 @@ class FakeClient {
   incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   promptResolve: (() => void) | null = null;
   holdPrompt = false;
+  failSetMode = false;
+  calls: { method: string; params: unknown }[] = [];
 
   onNotification(handler: (method: string, params: unknown) => void): void {
     this.notificationHandler = handler;
@@ -17,7 +19,11 @@ class FakeClient {
     this.incomingRequestHandler = handler;
   }
 
-  async call(method: string): Promise<unknown> {
+  async call(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === 'session/set_mode' && this.failSetMode) {
+      throw new Error('set mode failed');
+    }
     if (method === 'session/load') {
       this.emit('stored-session', 'replayed history');
       return {};
@@ -117,6 +123,73 @@ test('accepts session/load replay without treating it as a background notificati
   assert.equal(sessionId, 'stored-session');
   assert.equal(events.at(-1)?.text, 'replayed history');
   assert.equal(events.at(-1)?.background, false);
+});
+
+test('applies the configured edit-approval mode when creating a session', async () => {
+  const client = new FakeClient();
+  const manager = new SessionManager(client as never, () => {}, undefined, 'accept_edits');
+
+  await manager.ensureSession('/workspace');
+
+  assert.deepEqual(client.calls.slice(0, 2), [
+    {
+      method: 'session/new',
+      params: { cwd: '/workspace', mcpServers: [] },
+    },
+    {
+      method: 'session/set_mode',
+      params: { sessionId: 'active-session', modeId: 'accept_edits' },
+    },
+  ]);
+});
+
+test('applies the configured edit-approval mode when loading a session', async () => {
+  const client = new FakeClient();
+  const manager = new SessionManager(client as never, () => {}, undefined, 'accept_edits');
+  manager.setStoredSessionId('stored-session');
+
+  await manager.ensureSession('/workspace');
+
+  assert.deepEqual(client.calls.slice(0, 2), [
+    {
+      method: 'session/load',
+      params: { sessionId: 'stored-session', cwd: '/workspace', mcpServers: [] },
+    },
+    {
+      method: 'session/set_mode',
+      params: { sessionId: 'stored-session', modeId: 'accept_edits' },
+    },
+  ]);
+});
+
+test('changes the mode of an active session without creating a replacement', async () => {
+  const client = new FakeClient();
+  const manager = new SessionManager(client as never);
+  await manager.ensureSession('/workspace');
+  client.calls = [];
+
+  await manager.setEditApprovalMode('accept_edits', '/workspace');
+
+  assert.deepEqual(client.calls, [
+    {
+      method: 'session/set_mode',
+      params: { sessionId: 'active-session', modeId: 'accept_edits' },
+    },
+  ]);
+});
+
+test('keeps the previous mode when an active-session mode change fails', async () => {
+  const client = new FakeClient();
+  const manager = new SessionManager(client as never);
+  await manager.ensureSession('/workspace');
+  client.failSetMode = true;
+
+  await assert.rejects(
+    manager.setEditApprovalMode('accept_edits', '/workspace'),
+    /set mode failed/,
+  );
+
+  assert.equal(manager.getEditApprovalMode(), 'default');
 });
 
 

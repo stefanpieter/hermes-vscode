@@ -10,6 +10,12 @@ import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
 import { selectedPermissionResponse } from './permissionResponse';
 import { applyProfileSelection } from './profileSelection';
+import {
+  EDIT_APPROVAL_MODES,
+  EditApprovalModeId,
+  editApprovalModeLabel,
+  normalizeEditApprovalMode,
+} from './editApprovalMode';
 
 const DEFAULT_SONNET_MODEL = 'claude-sonnet-4-6';
 const APPROVED_BINARIES_KEY = 'hermes.approvedBinaries';
@@ -88,6 +94,21 @@ function readConfiguredHermesProfile(): { value: string; workspaceOverrideIgnore
   const workspaceOverrideIgnored = !!(inspected?.workspaceValue || inspected?.workspaceFolderValue);
   const value = normalizeHermesProfile(inspected?.globalValue ?? inspected?.defaultValue ?? '');
   return { value, workspaceOverrideIgnored };
+}
+
+function readConfiguredEditApprovalMode(): { value: EditApprovalModeId; workspaceOverrideIgnored: boolean } {
+  const hermesConfig = vscode.workspace.getConfiguration('hermes');
+  const inspected = hermesConfig.inspect<string>('editApprovalMode');
+  const workspaceOverrideIgnored = !!(inspected?.workspaceValue || inspected?.workspaceFolderValue);
+  const value = normalizeEditApprovalMode(inspected?.globalValue ?? inspected?.defaultValue ?? 'default');
+  return { value, workspaceOverrideIgnored };
+}
+
+function resolveWorkingDirectory(): string {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceFolder) return workspaceFolder;
+  const activeEditorPath = vscode.window.activeTextEditor?.document.uri.fsPath;
+  return activeEditorPath ? path.dirname(activeEditorPath) : process.cwd();
 }
 
 function profileLabel(profile: string, defaultProfileName = ''): string {
@@ -262,6 +283,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   let hermesProfile = configuredProfile.value;
   let defaultProfileName = readDefaultHermesProfileName();
+  const configuredEditApproval = readConfiguredEditApprovalMode();
+  if (configuredEditApproval.workspaceOverrideIgnored) {
+    outputChannel.appendLine('[security] Ignoring workspace-scoped hermes.editApprovalMode override');
+  }
+  let editApprovalMode = configuredEditApproval.value;
 
   outputChannel.appendLine(`[hermes] homedir: ${os.homedir()}`);
   outputChannel.appendLine(`[hermes] platform: ${process.platform}`);
@@ -269,6 +295,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     hermesPath = resolveHermesBinary(hermesPath);
     outputChannel.appendLine(`[hermes] binary: ${hermesPath}`);
     outputChannel.appendLine(`[hermes] ${profileLabel(hermesProfile, defaultProfileName)}`);
+    outputChannel.appendLine(`[security] edit approval mode: ${editApprovalMode}`);
   } catch (err) {
     outputChannel.appendLine(`[security] invalid Hermes binary: ${err}`);
   }
@@ -319,7 +346,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     throw new Error('Permission denied by user');
   };
 
-  const session = new SessionManager(client, line => outputChannel.appendLine(line), permissionHandler);
+  const session = new SessionManager(
+    client,
+    line => outputChannel.appendLine(line),
+    permissionHandler,
+    editApprovalMode,
+  );
   const { model: hermesModel } = readHermesModel();
   const hermesVersion = readHermesVersion(hermesPath);
   const applySelectedProfile = async (nextProfile: string, source: string) => {
@@ -432,6 +464,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!result.changed) return;
       if (result.restarted) panel.post({ type: 'clear' });
       panel.refreshProfileState();
+    }),
+
+    vscode.commands.registerCommand('hermes.selectEditApprovalMode', async () => {
+      outputChannel.appendLine('[ui] select edit approval mode');
+      const picked = await vscode.window.showQuickPick(
+        EDIT_APPROVAL_MODES.map(mode => ({
+          label: mode.label,
+          description: mode.description,
+          detail: mode.id === editApprovalMode ? 'Current mode' : undefined,
+          modeId: mode.id,
+        })),
+        {
+          placeHolder: `Current: ${editApprovalModeLabel(editApprovalMode)}`,
+          title: 'Hermes edit approval mode',
+        },
+      );
+      if (!picked || picked.modeId === editApprovalMode) return;
+
+      try {
+        await ensureConnected();
+        if (!client?.running) throw new Error('ACP client is not connected');
+        await session.setEditApprovalMode(picked.modeId, resolveWorkingDirectory());
+        await vscode.workspace.getConfiguration('hermes').update(
+          'editApprovalMode',
+          picked.modeId,
+          vscode.ConfigurationTarget.Global,
+        );
+        editApprovalMode = picked.modeId;
+        outputChannel.appendLine(`[security] edit approval mode changed to ${editApprovalMode}`);
+        void vscode.window.showInformationMessage(
+          `Hermes edit approval mode: ${editApprovalModeLabel(editApprovalMode)}.`,
+        );
+      } catch (err) {
+        outputChannel.appendLine(`[security] failed to change edit approval mode: ${err}`);
+        void vscode.window.showErrorMessage(`Hermes: failed to change edit approval mode — ${err}`);
+      }
     }),
   );
 
