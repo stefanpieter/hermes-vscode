@@ -6,6 +6,16 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.8] — 2026-07-15
+
+### Added
+
+- `Hermes: Select Edit Approval Mode` exposes Hermes ACP's Default, Accept Edits, and Don't Ask modes. The selected machine-scoped mode is applied to active sessions and reapplied after session creation or resume.
+
+### Fixed
+
+- Autonomous continuations can use the workspace-scoped Accept Edits mode instead of silently waiting 60 seconds for an unattended one-shot prompt and then reporting an ACP edit-approval denial. The secure Default mode remains the default, workspace settings cannot weaken it, and sensitive paths still require approval.
+
 ## [3.2.7] — 2026-07-14
 
 ### Fixed
