@@ -9,6 +9,8 @@ import type { ToWebview, FromWebview, TodoItem } from '../types';
 import { createInitialState } from './state';
 import {
   acknowledgeStartedQueuedMessage,
+  createComposerRequestId,
+  hydrateWebviewQueueState,
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
 import { isKnownSlashCommand } from '../slashCommands';
@@ -66,6 +68,12 @@ const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElemen
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
+
+// The host owns the live queue across webview disposal. Keep submission controls
+// unavailable until the ready handshake restores that runtime state.
+inputEl.disabled = true;
+sendBtn.disabled = true;
+queueBtn.disabled = true;
 
 const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profileMenu, cmdArgPopover };
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
@@ -139,12 +147,11 @@ function scheduleFlush(): void {
 }
 
 // ── Send ─────────────────────────────────────────────
-let nextComposerRequestId = 1;
-
 function send(): void {
+  if (!S.queueHydrated) return;
   const text = inputEl.value.trim();
   if (!text) return;
-  const requestId = `composer-${nextComposerRequestId++}`;
+  const requestId = createComposerRequestId(() => crypto.randomUUID());
   const isSlash = isKnownSlashCommand(text);
   const queued = registerSubmittedWebviewMessage(S, { requestId, text, isSlashCommand: isSlash });
   inputEl.value = '';
@@ -422,6 +429,22 @@ window.addEventListener('message', (e: MessageEvent) => {
       break;
     }
 
+    case 'queueState': {
+      const active = msg.active ?? false;
+      const queued = msg.queued ?? 0;
+      hydrateWebviewQueueState(S, {
+        active,
+        queued,
+        activeSlashCommand: msg.activeSlashCommand ?? false,
+      });
+      inputEl.disabled = false;
+      sendBtn.disabled = false;
+      queueBtn.disabled = false;
+      setBusy(active, queued);
+      inputEl.focus();
+      break;
+    }
+
     case 'busy': {
       const newQueued = msg.queued ?? 0;
       if (msg.active && msg.startedText !== undefined && msg.startedSlashCommand !== undefined) {
@@ -578,3 +601,7 @@ window.addEventListener('message', (e: MessageEvent) => {
       break;
   }
 });
+
+// Replace arbitrary initialization delays with an explicit host handshake. The
+// host replies with queueState before enabling submission controls.
+vscode.postMessage({ type: 'ready' });

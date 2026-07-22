@@ -24,6 +24,7 @@ export interface WebviewState {
   pendingSlashResponse: boolean;
 
   // Queue
+  queueHydrated: boolean;
   pendingQueuedMessages: QueuedWebviewMessage[];
   prevQueueCount: number;
 
@@ -49,6 +50,7 @@ export function createInitialState(): WebviewState {
     flushScheduled: false,
     markdownDebounceTimer: null,
     pendingSlashResponse: false,
+    queueHydrated: false,
     pendingQueuedMessages: [],
     prevQueueCount: 0,
     currentProfile: '',

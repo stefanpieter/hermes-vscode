@@ -78,7 +78,7 @@ export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
 export interface ToWebview {
   type:
     | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
-    | 'error' | 'status' | 'clear' | 'busy'
+    | 'error' | 'status' | 'clear' | 'busy' | 'queueState'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;
   toolName?: string;
@@ -95,6 +95,7 @@ export interface ToWebview {
   startedText?: string;
   startedSlashCommand?: boolean;
   startedRequestId?: string;
+  activeSlashCommand?: boolean;
   model?: string;
   sessionTitle?: string;
   contextUsed?: number;
@@ -117,7 +118,7 @@ export interface ToWebview {
 
 export interface FromWebview {
   type:
-    | 'send' | 'switchModel' | 'cancel'
+    | 'ready' | 'send' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
     | 'toggleSkill' | 'renameSession' | 'deleteSession'

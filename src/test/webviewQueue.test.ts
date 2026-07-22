@@ -4,6 +4,8 @@ import test from 'node:test';
 import { isKnownSlashCommand } from '../slashCommands';
 import {
   acknowledgeStartedQueuedMessage,
+  createComposerRequestId,
+  hydrateWebviewQueueState,
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
 
@@ -113,4 +115,53 @@ test('rapid follow-up is queued before the host busy round-trip', () => {
   assert.deepEqual(state.pendingQueuedMessages, [
     { requestId: 'composer-2', text: 'Second', isSlashCommand: false },
   ]);
+});
+
+test('composer request IDs remain unique across recreated webviews', () => {
+  const first = createComposerRequestId(() => 'webview-a');
+  const recreated = createComposerRequestId(() => 'webview-b');
+
+  assert.equal(first, 'composer-webview-a');
+  assert.equal(recreated, 'composer-webview-b');
+  assert.notEqual(first, recreated);
+
+  const state = {
+    pendingQueuedMessages: [
+      { requestId: recreated, text: 'New view follow-up', isSlashCommand: false },
+    ],
+    pendingSlashResponse: false,
+  };
+  const oldViewPrompt = acknowledgeStartedQueuedMessage(
+    state,
+    'Old view queued prompt',
+    false,
+    first,
+  );
+
+  assert.equal(oldViewPrompt.text, 'Old view queued prompt');
+  assert.deepEqual(state.pendingQueuedMessages, [
+    { requestId: recreated, text: 'New view follow-up', isSlashCommand: false },
+  ]);
+});
+
+test('recreated webview hydrates active queue and slash response state', () => {
+  const state = {
+    isBusy: false,
+    queueHydrated: false,
+    prevQueueCount: 0,
+    pendingSlashResponse: false,
+  };
+
+  hydrateWebviewQueueState(state, {
+    active: true,
+    queued: 2,
+    activeSlashCommand: true,
+  });
+
+  assert.deepEqual(state, {
+    isBusy: true,
+    queueHydrated: true,
+    prevQueueCount: 2,
+    pendingSlashResponse: true,
+  });
 });
