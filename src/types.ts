@@ -92,6 +92,8 @@ export interface ToWebview {
   status?: string;
   active?: boolean;
   queued?: number;
+  startedText?: string;
+  startedSlashCommand?: boolean;
   model?: string;
   sessionTitle?: string;
   contextUsed?: number;

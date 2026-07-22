@@ -143,21 +143,13 @@ ${CSS_TEMPLATE}
       <button class="cmd-btn" id="overflow-btn" title="Slash commands"><span class="btn-icon">/</span></button>
       <div id="overflow-menu" style="display:none">
       <div class="menu-group-label">Session</div>
-      <div class="menu-item" data-cmd="/title" data-mode="prompt" data-arg-label="Session title"><span class="cmd-name">/title</span> Rename session…</div>
-      <div class="menu-item" data-cmd="/new" data-mode="execute"><span class="cmd-name">/new</span> Fresh session</div>
-      <div class="menu-item" data-cmd="/retry" data-mode="execute"><span class="cmd-name">/retry</span> Retry last message</div>
       <div class="menu-item" data-cmd="/compact" data-mode="execute"><span class="cmd-name">/compact</span> Compress context</div>
-      <div class="menu-item" data-cmd="/save" data-mode="prompt" data-arg-label="Filename (optional)"><span class="cmd-name">/save</span> Save conversation…</div>
 
       <div class="menu-group-label">Info</div>
       <div class="menu-item" data-cmd="/context" data-mode="execute"><span class="cmd-name">/context</span> Context info</div>
-      <div class="menu-item" data-cmd="/usage" data-mode="execute"><span class="cmd-name">/usage</span> Token usage</div>
       <div class="menu-item" data-cmd="/tools" data-mode="execute"><span class="cmd-name">/tools</span> List tools</div>
+      <div class="menu-item" data-cmd="/version" data-mode="execute"><span class="cmd-name">/version</span> Hermes version</div>
       <div class="menu-item" data-cmd="/help" data-mode="execute"><span class="cmd-name">/help</span> All commands</div>
-
-      <div class="menu-group-label">Configuration</div>
-      <div class="menu-item" data-cmd="/yolo" data-mode="execute"><span class="cmd-name">/yolo</span> Toggle YOLO mode</div>
-      <div class="menu-item" data-cmd="/reasoning" data-mode="prompt" data-arg-label="Reasoning level (none|low|medium|high|xhigh)"><span class="cmd-name">/reasoning</span> Set effort…</div>
 
       <div class="menu-group-label danger-label">Danger</div>
       <div class="menu-item danger" data-cmd="/reset" data-mode="confirm" data-confirm="Clear the entire conversation history? This cannot be undone."><span class="cmd-name">/reset</span> Reset conversation</div>

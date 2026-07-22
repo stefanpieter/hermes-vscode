@@ -3,6 +3,8 @@
  * All modules import and mutate this single object.
  */
 
+import type { QueuedWebviewMessage } from '../webviewQueue';
+
 export interface WebviewState {
   currentModel: string;
   currentActiveSessionId: string;
@@ -22,7 +24,7 @@ export interface WebviewState {
   pendingSlashResponse: boolean;
 
   // Queue
-  pendingQueuedTexts: string[];
+  pendingQueuedMessages: QueuedWebviewMessage[];
   prevQueueCount: number;
 
   // Profiles
@@ -47,7 +49,7 @@ export function createInitialState(): WebviewState {
     flushScheduled: false,
     markdownDebounceTimer: null,
     pendingSlashResponse: false,
-    pendingQueuedTexts: [],
+    pendingQueuedMessages: [],
     prevQueueCount: 0,
     currentProfile: '',
     profileRestartRequired: false,

@@ -6,6 +6,13 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.9] — 2026-07-22
+
+### Fixed
+
+- Messages submitted while Hermes is working now wait in one local FIFO queue instead of hard-cancelling the active ACP request. Model changes and slash/menu actions use the same serialized path; session renames remain local and do not start an ACP prompt. This prevents the working pulse from stopping while follow-ups silently produce no response; the Stop button remains the explicit hard-cancel control.
+- Queued turns retain their own attachments, selected skills, IDE context, and slash-command display semantics instead of borrowing mutable composer state from later messages.
+
 ## [3.2.8] — 2026-07-15
 
 ### Added
@@ -163,7 +170,7 @@ Security and stability hardening.
 - Extended thinking display (gold italic status line).
 - Inline image rendering via Hermes `MEDIA:/path` protocol.
 - Copy buttons on all code blocks.
-- Queued prompts with interrupt mode — new messages cancel the current turn.
+- Queued prompts submitted while the agent is working run after the current turn.
 - Logo pulses gold and input border glows while agent is working.
 
 ### Tool Integration

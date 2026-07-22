@@ -54,9 +54,9 @@ Slash command responses render as centered system messages, not conversation bub
 - Context usage displayed as `Xk / 1M` with progress bar
 - Color warnings at 70% (gold) and 90% (red)
 
-### Queue & Interrupt
-- Send follow-ups while busy (queued)
-- New messages cancel the current turn
+### Queue & Stop
+- Send follow-ups while busy; they run in order after the active turn
+- Use Stop for an explicit hard cancel
 - Gold glow on composer while agent is working
 
 ## Requirements
