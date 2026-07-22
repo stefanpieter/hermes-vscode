@@ -14,7 +14,7 @@ import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
-import { bindPromptSession } from './promptSessionBinding';
+import { sendPromptWithSessionBinding } from './promptSessionBinding';
 import { sessionSwitchUiMessages } from './sessionSwitchUi';
 import { isKnownSlashCommand } from './slashCommands';
 import type { ProfileMenuItem } from './profileUi';
@@ -558,10 +558,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     try {
-      // Bind ACP ownership before session/prompt can emit explicit background
-      // notifications on the first turn of a newly-created chat.
-      await bindPromptSession(this.session, this.store, cwd);
-      await this.session.sendPrompt(prompt, cwd);
+      // SessionManager establishes turn cancellation ownership before binding,
+      // while the binding callback persists ACP ownership before session/prompt.
+      await sendPromptWithSessionBinding(this.session, this.store, prompt, cwd);
     } catch (err) {
       const msg = String(err);
       if (msg.includes('Cancelled')) {

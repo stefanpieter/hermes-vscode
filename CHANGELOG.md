@@ -6,6 +6,14 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.12] — 2026-07-22
+
+### Fixed
+
+- Explicit Stop now owns the active turn before first-session creation or stored-session loading begins, so cancellation during ACP session binding cannot be cleared before `session/prompt` starts.
+- Session persistence now runs inside the cancellation-owned prompt operation, preserving ACP ownership without opening a pre-prompt cancellation gap.
+- Per-turn cancellation state and the terminal-response barrier keep queued prompts serialized and stale cancelled updates gated.
+
 ## [3.2.11] — 2026-07-22
 
 ### Fixed

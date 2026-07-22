@@ -4,6 +4,7 @@ import Module from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { SessionManager } from '../sessionManager';
 
 const moduleLoader = Module as unknown as {
   _load(request: string, parent: unknown, isMain: boolean): unknown;
@@ -43,6 +44,90 @@ moduleLoader._load = function loadWithVscodeStub(
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { ChatPanelProvider } = require('../chatPanel') as typeof import('../chatPanel');
 moduleLoader._load = originalLoad;
+
+class BindingRaceClient {
+  notificationHandler: ((method: string, params: unknown) => void) | null = null;
+  incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
+  sessionNewResolve: (() => void) | null = null;
+  calls: Array<{ method: string; params: unknown }> = [];
+  notifications: Array<{ method: string; params: unknown }> = [];
+
+  onNotification(handler: (method: string, params: unknown) => void): void {
+    this.notificationHandler = handler;
+  }
+
+  onIncomingRequest(handler: (method: string, params: unknown) => Promise<unknown>): void {
+    this.incomingRequestHandler = handler;
+  }
+
+  async call(method: string, params: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === 'session/new') {
+      await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
+      return { sessionId: 'binding-session' };
+    }
+    return {};
+  }
+
+  notify(method: string, params: unknown): void {
+    this.notifications.push({ method, params });
+  }
+}
+
+test('Stop during first-session binding cancels that turn before queued work starts', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-binding-cancel-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const client = new BindingRaceClient();
+  const session = new SessionManager(client as never);
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Cancel while binding', requestId: 'active' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(client.calls.map(call => call.method), ['session/new']);
+
+    await subject.handleFromWebview({ type: 'send', text: 'Run after cancellation', requestId: 'queued' });
+    await subject.handleFromWebview({ type: 'cancel' });
+    client.sessionNewResolve?.();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    const promptTexts = client.calls
+      .filter(call => call.method === 'session/prompt')
+      .map(call => ((call.params as { prompt: Array<{ text: string }> }).prompt[0].text));
+    assert.deepEqual(
+      promptTexts,
+      ['Run after cancellation'],
+      'Stop during binding must cancel the owned turn instead of being reset before session/prompt',
+    );
+    const storedSessions = state.get('hermes.sessions') as Array<{ acpSessionId?: string }>;
+    assert.equal(storedSessions[0].acpSessionId, 'binding-session');
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
 
 test('queues a follow-up submitted while busy without cancelling the active prompt', async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-busy-queue-'));
