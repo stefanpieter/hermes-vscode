@@ -22,6 +22,7 @@ import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, Fr
 
 interface PromptRequest {
   text: string;
+  requestId?: string;
   isSlashCommand: boolean;
   attachedFiles: AttachedFile[];
   selectedSkills: string[];
@@ -282,7 +283,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async handleFromWebview(msg: FromWebview): Promise<void> {
     if (msg.type === 'send' && msg.text) {
       this.log(`[ui] send (${msg.text.length} chars)`);
-      const request = this.capturePromptRequest(msg.text);
+      const request = this.capturePromptRequest(msg.text, msg.requestId);
       this.enqueueOrRun(request);
 
     } else if (msg.type === 'cancel') {
@@ -431,10 +432,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /** Snapshot composer-owned context so later input cannot mutate a queued turn. */
-  private capturePromptRequest(text: string): PromptRequest {
+  private capturePromptRequest(text: string, requestId?: string): PromptRequest {
     const isSlashCommand = isKnownSlashCommand(text);
     const request: PromptRequest = {
       text,
+      ...(requestId ? { requestId } : {}),
       isSlashCommand,
       // The webview clears composer chips when any message is sent. Slash
       // commands have no user bubble and do not accept composer context, so
@@ -505,7 +507,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     this.busy = true;
-    this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
+    this.post({
+      type: 'busy',
+      active: true,
+      queued: this.messageQueue.length,
+      ...(request.requestId === undefined ? {
+        startedText: text,
+        startedSlashCommand: request.isSlashCommand,
+      } : {}),
+    });
     const cwd = this.resolveWorkingDirectory();
 
     // Prepend IDE context + attached file for regular messages (not slash commands)
@@ -555,6 +565,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           queued: this.messageQueue.length,
           startedText: next.text,
           startedSlashCommand: next.isSlashCommand,
+          ...(next.requestId ? { startedRequestId: next.requestId } : {}),
         });
         void this.runPrompt(next);
       } else {

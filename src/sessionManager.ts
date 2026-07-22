@@ -42,13 +42,6 @@ export class SessionManager {
   /** Accumulated streaming text for the current turn (used for dedup). */
   private accumulated = '';
 
-  /**
-   * Reject handle for the in-flight session/prompt call.
-   * Set while sendPrompt is awaiting; cleared on resolve/cancel.
-   * Calling it immediately unblocks runPrompt without waiting for Hermes to ack.
-   */
-  private promptReject: ((err: Error) => void) | null = null;
-
   /** Set by cancel() to gate out stale session/update notifications from Hermes. */
   private cancelled = false;
 
@@ -195,33 +188,30 @@ export class SessionManager {
   }
 
   async sendPrompt(text: string, cwd: string): Promise<void> {
+    // Establish cancellation state before this method's own session lookup.
+    this.cancelled = false;
     const sessionId = await this.ensureSession(cwd);
+    if (this.cancelled) throw new Error('Cancelled');
     this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
     this.accumulated = '';
-    this.cancelled = false;
 
-    // Wrap the call in a cancellable promise so cancel() can unblock us immediately
-    // without having to wait for Hermes to finish processing session/cancel.
     let promptResponse: Record<string, unknown> = {};
     this.promptActive = true;
     try {
-      await new Promise<void>((resolve, reject) => {
-        this.promptReject = reject;
-
-        this.client
-          .call('session/prompt', {
-            sessionId,
-            prompt: [{ type: 'text', text }],
-          })
-          .then((result) => {
-            promptResponse = (result as Record<string, unknown>) ?? {};
-            resolve();
-          })
-          .catch(reject)
-          .finally(() => {
-            this.promptReject = null;
-          });
-      });
+      try {
+        const result = await this.client.call('session/prompt', {
+          sessionId,
+          prompt: [{ type: 'text', text }],
+        });
+        promptResponse = (result as Record<string, unknown>) ?? {};
+      } catch (err) {
+        if (this.cancelled) throw new Error('Cancelled');
+        throw err;
+      }
+      // A cancellation is complete only when the matching ACP request reaches a
+      // terminal response. This barrier prevents the caller from draining its
+      // next queued turn while the cancelled request is still live remotely.
+      if (this.cancelled) throw new Error('Cancelled');
     } finally {
       this.promptActive = false;
     }
@@ -247,14 +237,9 @@ export class SessionManager {
   async cancel(): Promise<void> {
     this.cancelled = true;
     this.log('[session] cancel requested');
-    // Unblock sendPrompt immediately — don't wait for Hermes to ack
-    if (this.promptReject) {
-      this.promptReject(new Error('Cancelled'));
-      this.promptReject = null;
-    }
-
     if (!this.sessionId) return;
     // session/cancel is a notification in ACP — no id, no response expected
+    // sendPrompt intentionally remains pending until session/prompt terminates.
     this.client.notify('session/cancel', { sessionId: this.sessionId });
   }
 

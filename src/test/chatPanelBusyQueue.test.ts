@@ -86,6 +86,7 @@ test('queues a follow-up submitted while busy without cancelling the active prom
       lastTurnText: string;
       messageQueue: Array<{
         text: string;
+        requestId?: string;
         attachedFiles: Array<{ name: string; path: string }>;
         selectedSkills: string[];
         ideContext: string;
@@ -102,12 +103,12 @@ test('queues a follow-up submitted while busy without cancelling the active prom
         selectedSkills: string[];
         ideContext: string;
       };
-      handleFromWebview(message: { type: 'send'; text: string }): Promise<void>;
+      handleFromWebview(message: { type: 'send'; text: string; requestId?: string }): Promise<void>;
     };
     subject.store.ensureSession();
     subject.post = (message) => { posted.push(message); };
 
-    await subject.handleFromWebview({ type: 'send', text: 'Start the long task' });
+    await subject.handleFromWebview({ type: 'send', text: 'Start the long task', requestId: 'active-1' });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(prompts, ['Start the long task']);
 
@@ -117,7 +118,9 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     };
     subject.attachedFiles = [{ name: 'first.md', path: '/context/first.md' }];
     subject.selectedSkills = ['first-skill'];
-    await subject.handleFromWebview({ type: 'send', text: 'Use the safer approach instead' });
+    await subject.handleFromWebview({
+      type: 'send', text: 'Use the safer approach instead', requestId: 'queued-1',
+    });
 
     vscodeWindow.activeTextEditor = {
       document: { uri: { fsPath: '/workspace/second.ts' } },
@@ -125,23 +128,28 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     };
     subject.attachedFiles = [{ name: 'second.md', path: '/context/second.md' }];
     subject.selectedSkills = ['second-skill'];
-    await subject.handleFromWebview({ type: 'send', text: 'Then verify the result' });
+    await subject.handleFromWebview({
+      type: 'send', text: 'Then verify the result', requestId: 'queued-2',
+    });
 
     assert.equal(cancelCalls, 0, 'a normal follow-up must not hard-cancel the active ACP request');
     assert.deepEqual(subject.messageQueue.map(item => ({
       text: item.text,
+      requestId: item.requestId,
       files: item.attachedFiles.map(file => file.path),
       skills: item.selectedSkills,
       ideContext: item.ideContext,
     })), [
       {
         text: 'Use the safer approach instead',
+        requestId: 'queued-1',
         files: ['/context/first.md'],
         skills: ['first-skill'],
         ideContext: '[Active file: /workspace/first.ts]\n\n',
       },
       {
         text: 'Then verify the result',
+        requestId: 'queued-2',
         files: ['/context/second.md'],
         skills: ['second-skill'],
         ideContext: '[Active file: /workspace/second.ts]\n\n',
@@ -169,6 +177,7 @@ test('queues a follow-up submitted while busy without cancelling the active prom
       queued: 1,
       startedText: 'Use the safer approach instead',
       startedSlashCommand: false,
+      startedRequestId: 'queued-1',
     });
     assert.deepEqual(
       prompts.map(prompt => prompt.includes('Use the safer approach instead')
@@ -222,6 +231,7 @@ test('queues model changes and keeps local title changes out of ACP while busy',
   let activePromptCalls = 0;
   let maxActivePromptCalls = 0;
   const prompts: string[] = [];
+  const posted: Record<string, unknown>[] = [];
   const promptResolvers: Array<() => void> = [];
   const state = new Map<string, unknown>();
   const context = {
@@ -262,10 +272,14 @@ test('queues model changes and keeps local title changes out of ACP while busy',
       handleFromWebview(message: Record<string, unknown>): Promise<void>;
     };
     subject.store.ensureSession();
-    subject.post = () => {};
+    subject.post = message => { posted.push(message); };
     vscodeWindow.showInputBox = async () => 'Renamed while busy';
 
-    await subject.handleFromWebview({ type: 'send', text: 'Run the active task' });
+    await subject.handleFromWebview({
+      type: 'send',
+      text: 'Run the active task',
+      requestId: 'active-1',
+    });
     await new Promise(resolve => setImmediate(resolve));
     await subject.handleFromWebview({ type: 'switchModel', model: 'next-model' });
     await subject.handleFromWebview({
@@ -287,6 +301,19 @@ test('queues model changes and keeps local title changes out of ACP while busy',
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(prompts, ['Run the active task', '/model next-model']);
     assert.equal(maxActivePromptCalls, 1);
+
+    await subject.handleFromWebview({ type: 'switchModel', model: 'idle-model' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(prompts, ['Run the active task', '/model next-model', '/model idle-model']);
+    assert.equal(maxActivePromptCalls, 1);
+    assert.ok(posted.some(message =>
+      message.type === 'busy'
+      && message.startedText === '/model idle-model'
+      && message.startedSlashCommand === true
+      && message.startedRequestId === undefined
+    ), 'an idle host-only command should announce its slash-response semantics');
+    promptResolvers.shift()?.();
+    await new Promise(resolve => setImmediate(resolve));
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
