@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { isKnownSlashCommand } from '../slashCommands';
-import { acknowledgeStartedQueuedMessage } from '../webviewQueue';
+import {
+  acknowledgeStartedQueuedMessage,
+  registerSubmittedWebviewMessage,
+} from '../webviewQueue';
 
 test('host and webview share slash-command classification', () => {
   assert.equal(isKnownSlashCommand('/help'), true);
@@ -17,14 +20,20 @@ test('host and webview share slash-command classification', () => {
 test('queued slash commands retain system-response semantics during handoff', () => {
   const state = {
     pendingQueuedMessages: [
-      { text: '/queue verify after completion', isSlashCommand: true },
-      { text: 'Explain the status', isSlashCommand: false },
+      { requestId: 'slash-1', text: '/queue verify after completion', isSlashCommand: true },
+      { requestId: 'prose-1', text: 'Explain the status', isSlashCommand: false },
     ],
     pendingSlashResponse: false,
   };
 
-  const slash = acknowledgeStartedQueuedMessage(state, '/queue verify after completion', true);
+  const slash = acknowledgeStartedQueuedMessage(
+    state,
+    '/queue verify after completion',
+    true,
+    'slash-1',
+  );
   assert.deepEqual(slash, {
+    requestId: 'slash-1',
     text: '/queue verify after completion',
     isSlashCommand: true,
     renderUserMessage: false,
@@ -32,11 +41,12 @@ test('queued slash commands retain system-response semantics during handoff', ()
   });
   assert.equal(state.pendingSlashResponse, true);
   assert.deepEqual(state.pendingQueuedMessages, [
-    { text: 'Explain the status', isSlashCommand: false },
+    { requestId: 'prose-1', text: 'Explain the status', isSlashCommand: false },
   ]);
 
-  const prose = acknowledgeStartedQueuedMessage(state, 'Explain the status', false);
+  const prose = acknowledgeStartedQueuedMessage(state, 'Explain the status', false, 'prose-1');
   assert.deepEqual(prose, {
+    requestId: 'prose-1',
     text: 'Explain the status',
     isSlashCommand: false,
     renderUserMessage: true,
@@ -49,7 +59,7 @@ test('queued slash commands retain system-response semantics during handoff', ()
 test('host-only commands do not consume the next composer-queued message', () => {
   const state = {
     pendingQueuedMessages: [
-      { text: 'Explain the status', isSlashCommand: false },
+      { requestId: 'prose-1', text: 'Explain the status', isSlashCommand: false },
     ],
     pendingSlashResponse: false,
   };
@@ -58,6 +68,49 @@ test('host-only commands do not consume the next composer-queued message', () =>
   assert.equal(model.renderUserMessage, false);
   assert.equal(state.pendingSlashResponse, true);
   assert.deepEqual(state.pendingQueuedMessages, [
-    { text: 'Explain the status', isSlashCommand: false },
+    { requestId: 'prose-1', text: 'Explain the status', isSlashCommand: false },
+  ]);
+});
+
+test('host-only command cannot consume identical composer text', () => {
+  const state = {
+    pendingQueuedMessages: [
+      { requestId: 'composer-1', text: '/model next-model', isSlashCommand: true },
+    ],
+    pendingSlashResponse: false,
+  };
+
+  const hostOnly = acknowledgeStartedQueuedMessage(state, '/model next-model', true, undefined);
+  assert.equal(hostOnly.renderUserMessage, false);
+  assert.deepEqual(state.pendingQueuedMessages, [
+    { requestId: 'composer-1', text: '/model next-model', isSlashCommand: true },
+  ]);
+
+  const composer = acknowledgeStartedQueuedMessage(state, '/model next-model', true, 'composer-1');
+  assert.equal(composer.requestId, 'composer-1');
+  assert.deepEqual(state.pendingQueuedMessages, []);
+});
+
+test('rapid follow-up is queued before the host busy round-trip', () => {
+  const state = {
+    isBusy: false,
+    pendingQueuedMessages: [] as Array<{
+      requestId: string;
+      text: string;
+      isSlashCommand: boolean;
+    }>,
+  };
+
+  assert.equal(registerSubmittedWebviewMessage(state, {
+    requestId: 'composer-1', text: 'First', isSlashCommand: false,
+  }), false);
+  assert.equal(state.isBusy, true);
+  assert.deepEqual(state.pendingQueuedMessages, []);
+
+  assert.equal(registerSubmittedWebviewMessage(state, {
+    requestId: 'composer-2', text: 'Second', isSlashCommand: false,
+  }), true);
+  assert.deepEqual(state.pendingQueuedMessages, [
+    { requestId: 'composer-2', text: 'Second', isSlashCommand: false },
   ]);
 });

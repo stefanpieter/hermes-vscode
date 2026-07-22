@@ -10,6 +10,7 @@ class FakeClient {
   holdPrompt = false;
   failSetMode = false;
   calls: { method: string; params: unknown }[] = [];
+  notifications: { method: string; params: unknown }[] = [];
 
   onNotification(handler: (method: string, params: unknown) => void): void {
     this.notificationHandler = handler;
@@ -35,7 +36,9 @@ class FakeClient {
     return {};
   }
 
-  notify(): void {}
+  notify(method: string, params: unknown): void {
+    this.notifications.push({ method, params });
+  }
 
   emitUpdate(sessionId: string, update: Record<string, unknown>): void {
     this.notificationHandler?.('session/update', { sessionId, update });
@@ -84,6 +87,31 @@ test('keeps streaming messages inside an active prompt as foreground', async () 
   assert.equal(events.at(-1)?.background, false);
   client.promptResolve?.();
   await prompt;
+});
+
+test('cancel keeps the active turn pending until the ACP prompt terminates', async () => {
+  const client = new FakeClient();
+  client.holdPrompt = true;
+  const { manager, events } = managerWithEvents(client);
+  let settled = false;
+  const outcome = manager.sendPrompt('start work', '/tmp')
+    .then(() => 'resolved', (err: Error) => err.message)
+    .finally(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+
+  await manager.cancel();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(settled, false, 'local cancellation must not outrun the ACP terminal response');
+  assert.deepEqual(client.notifications, [{
+    method: 'session/cancel',
+    params: { sessionId: 'active-session' },
+  }]);
+  client.emit('active-session', 'late cancelled output');
+  assert.equal(events.some(event => event.text === 'late cancelled output'), false);
+
+  client.promptResolve?.();
+  assert.equal(await outcome, 'Cancelled');
 });
 
 test('ignores updates for a non-active ACP session', async () => {

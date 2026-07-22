@@ -94,6 +94,7 @@ export interface ToWebview {
   queued?: number;
   startedText?: string;
   startedSlashCommand?: boolean;
+  startedRequestId?: string;
   model?: string;
   sessionTitle?: string;
   contextUsed?: number;
@@ -122,6 +123,7 @@ export interface FromWebview {
     | 'toggleSkill' | 'renameSession' | 'deleteSession'
     | 'selectProfile' | 'customProfile' | 'restartHermes';
   text?: string;
+  requestId?: string;
   sessionId?: string;
   model?: string;
   data?: string;

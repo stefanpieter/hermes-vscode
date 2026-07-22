@@ -23,14 +23,12 @@ Requires Hermes CLI installed and authenticated. The extension spawns `hermes ac
 - Multi-select — injected as advisory prefix in the prompt
 
 ### Slash Commands
-Grouped command menu (`/` button). Three dispatch modes: immediate execute, inline argument prompt, or confirmation dialog.
+The grouped `/` menu exposes commands that need no free-form argument. Hermes ACP also accepts the complete recognized command set when typed into the composer.
 
-| Section | Commands |
+| Surface | Commands |
 |---------|----------|
-| **Session** | `/title`, `/new`, `/retry`, `/compact`, `/save` |
-| **Info** | `/context`, `/usage`, `/tools`, `/help` |
-| **Config** | `/yolo` (auto-approve dangerous ops, red glow), `/reasoning` |
-| **Danger** | `/reset` (with confirmation) |
+| **Menu** | `/compact`, `/context`, `/tools`, `/version`, `/help`, `/reset` (with confirmation) |
+| **Composer/API** | `/help`, `/model`, `/tools`, `/context`, `/reset`, `/compact`, `/steer`, `/queue`, `/version` |
 
 Slash command responses render as centered system messages, not conversation bubbles.
 

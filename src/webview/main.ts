@@ -7,7 +7,10 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { ToWebview, FromWebview, TodoItem } from '../types';
 import { createInitialState } from './state';
-import { acknowledgeStartedQueuedMessage } from '../webviewQueue';
+import {
+  acknowledgeStartedQueuedMessage,
+  registerSubmittedWebviewMessage,
+} from '../webviewQueue';
 import { isKnownSlashCommand } from '../slashCommands';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
@@ -136,27 +139,30 @@ function scheduleFlush(): void {
 }
 
 // ── Send ─────────────────────────────────────────────
+let nextComposerRequestId = 1;
+
 function send(): void {
   const text = inputEl.value.trim();
   if (!text) return;
+  const requestId = `composer-${nextComposerRequestId++}`;
   const isSlash = isKnownSlashCommand(text);
+  const queued = registerSubmittedWebviewMessage(S, { requestId, text, isSlashCommand: isSlash });
   inputEl.value = '';
   inputEl.style.height = '';
   attachChip.style.display = 'none'; attachChip.innerHTML = '';
   S.selectedSkillNames.clear();
   skillsBtn.classList.remove('has-skills'); skillsBtn.textContent = '✦';
   if (emptyState) emptyState.style.display = 'none';
-  if (!S.isBusy) {
+  if (!queued) {
     // Slash commands don't reach the LLM — don't render a user bubble.
     // The response from the adapter will be styled as a system bubble on 'done'.
     if (!isSlash) appendMessage(messagesEl, 'user', text);
     S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
     S.pendingSlashResponse = isSlash;
     if (!isSlash) showWaiting(messagesEl);
-  } else {
-    S.pendingQueuedMessages.push({ text, isSlashCommand: isSlash });
+    setBusy(true, 0);
   }
-  vscode.postMessage({ type: 'send', text });
+  vscode.postMessage({ type: 'send', text, requestId });
   requestAnimationFrame(syncComposerHeight);
 }
 
@@ -419,7 +425,12 @@ window.addEventListener('message', (e: MessageEvent) => {
     case 'busy': {
       const newQueued = msg.queued ?? 0;
       if (msg.active && msg.startedText !== undefined && msg.startedSlashCommand !== undefined) {
-        const next = acknowledgeStartedQueuedMessage(S, msg.startedText, msg.startedSlashCommand);
+        const next = acknowledgeStartedQueuedMessage(
+          S,
+          msg.startedText,
+          msg.startedSlashCommand,
+          msg.startedRequestId,
+        );
         S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
         if (next?.renderUserMessage) {
           appendMessage(messagesEl, 'user', next.text);

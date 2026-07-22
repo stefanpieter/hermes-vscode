@@ -6,6 +6,14 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.10] — 2026-07-22
+
+### Fixed
+
+- Stop now keeps the active turn behind an ACP terminal-response barrier, preventing a queued follow-up from overlapping the remotely cancelling prompt.
+- Queue handoffs use stable composer request IDs, so a host-only command cannot consume an identical composer-queued command; the first send also claims busy state synchronously so rapid follow-ups cannot outrun queue bookkeeping.
+- Slash-command documentation now matches the commands handled by the current Hermes ACP adapter.
+
 ## [3.2.9] — 2026-07-22
 
 ### Fixed
