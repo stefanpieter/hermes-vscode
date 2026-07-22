@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bindPromptSession } from '../promptSessionBinding';
+import { sendPromptWithSessionBinding } from '../promptSessionBinding';
 
-test('binds a new ACP session to storage before prompt execution can begin', async () => {
+test('establishes prompt ownership before binding and persists before prompt execution', async () => {
   const order: string[] = [];
   const session = {
-    async ensureSession(cwd: string): Promise<string> {
+    async sendPrompt(
+      text: string,
+      cwd: string,
+      onSessionBound?: (sessionId: string) => void,
+    ): Promise<void> {
+      order.push(`owned:${text}`);
       order.push(`ensure:${cwd}`);
-      return 'fresh-acp-session';
+      onSessionBound?.('fresh-acp-session');
+      order.push('prompt:fresh-acp-session');
     },
   };
   const store = {
@@ -16,11 +22,10 @@ test('binds a new ACP session to storage before prompt execution can begin', asy
     },
   };
 
-  const sessionId = await bindPromptSession(session, store, '/workspace');
-  order.push(`prompt:${sessionId}`);
+  await sendPromptWithSessionBinding(session, store, 'start work', '/workspace');
 
-  assert.equal(sessionId, 'fresh-acp-session');
   assert.deepEqual(order, [
+    'owned:start work',
     'ensure:/workspace',
     'persist:fresh-acp-session',
     'prompt:fresh-acp-session',

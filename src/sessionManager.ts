@@ -35,6 +35,13 @@ import {
 
 export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
+interface PromptTurn {
+  id: number;
+  sessionId: string | null;
+  cancelled: boolean;
+  promptActive: boolean;
+}
+
 export class SessionManager {
   private sessionId: string | null = null;
   private updateHandler: SessionUpdateHandler | null = null;
@@ -42,11 +49,9 @@ export class SessionManager {
   /** Accumulated streaming text for the current turn (used for dedup). */
   private accumulated = '';
 
-  /** Set by cancel() to gate out stale session/update notifications from Hermes. */
-  private cancelled = false;
-
-  /** True only while a session/prompt request is in flight. */
-  private promptActive = false;
+  /** Cancellation ownership for the one active turn, including session binding. */
+  private activePromptTurn: PromptTurn | null = null;
+  private nextPromptTurnId = 1;
 
   /** True while session/load is synchronously replaying persisted history. */
   private replayActive = false;
@@ -187,17 +192,30 @@ export class SessionManager {
     return this.sessionId;
   }
 
-  async sendPrompt(text: string, cwd: string): Promise<void> {
-    // Establish cancellation state before this method's own session lookup.
-    this.cancelled = false;
-    const sessionId = await this.ensureSession(cwd);
-    if (this.cancelled) throw new Error('Cancelled');
-    this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
+  async sendPrompt(
+    text: string,
+    cwd: string,
+    onSessionBound?: (sessionId: string) => void,
+  ): Promise<void> {
+    if (this.activePromptTurn) throw new Error('Prompt already active');
+    const turn: PromptTurn = {
+      id: this.nextPromptTurnId++,
+      sessionId: null,
+      cancelled: false,
+      promptActive: false,
+    };
+    this.activePromptTurn = turn;
     this.accumulated = '';
 
-    let promptResponse: Record<string, unknown> = {};
-    this.promptActive = true;
     try {
+      const sessionId = await this.ensureSession(cwd);
+      turn.sessionId = sessionId;
+      onSessionBound?.(sessionId);
+      if (turn.cancelled) throw new Error('Cancelled');
+      this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
+
+      let promptResponse: Record<string, unknown> = {};
+      turn.promptActive = true;
       try {
         const result = await this.client.call('session/prompt', {
           sessionId,
@@ -205,42 +223,48 @@ export class SessionManager {
         });
         promptResponse = (result as Record<string, unknown>) ?? {};
       } catch (err) {
-        if (this.cancelled) throw new Error('Cancelled');
+        if (turn.cancelled) throw new Error('Cancelled');
         throw err;
       }
       // A cancellation is complete only when the matching ACP request reaches a
       // terminal response. This barrier prevents the caller from draining its
       // next queued turn while the cancelled request is still live remotely.
-      if (this.cancelled) throw new Error('Cancelled');
-    } finally {
-      this.promptActive = false;
-    }
+      if (turn.cancelled) throw new Error('Cancelled');
 
-    // Extract current context usage from PromptResponse.
-    // usage.inputTokens = last_prompt_tokens (total sent to API including cached).
-    // usage.cachedReadTokens = portion served from Anthropic prompt cache (90% cheaper).
-    // _meta.contextLength = model context window size (for progress bar).
-    const usage = promptResponse.usage as Record<string, unknown> | undefined;
-    const meta = promptResponse['_meta'] as Record<string, unknown> | undefined;
-    const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens as number : 0;
-    const cachedTokens = typeof usage?.cachedReadTokens === 'number' ? usage.cachedReadTokens as number : 0;
-    // contextUsed shows total (matches what the model "sees"), but we also emit cached for the UI.
-    const contextUsed: number | undefined = inputTokens > 0 ? inputTokens : undefined;
-    const contextSize: number | undefined = (
-      typeof meta?.contextLength === 'number' && meta.contextLength > 0 ? meta.contextLength as number :
-      undefined
-    );
-    this.log(`[session] prompt done ${sessionId}${contextUsed ? ` used=${contextUsed}` : ''}${cachedTokens ? ` cached=${cachedTokens}` : ''}${contextSize ? ` size=${contextSize}` : ''}`);
-    this.updateHandler?.({ session_id: sessionId, done: true, contextUsed, contextSize, cachedTokens });
+      // Extract current context usage from PromptResponse.
+      // usage.inputTokens = last_prompt_tokens (total sent to API including cached).
+      // usage.cachedReadTokens = portion served from Anthropic prompt cache (90% cheaper).
+      // _meta.contextLength = model context window size (for progress bar).
+      const usage = promptResponse.usage as Record<string, unknown> | undefined;
+      const meta = promptResponse['_meta'] as Record<string, unknown> | undefined;
+      const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens as number : 0;
+      const cachedTokens = typeof usage?.cachedReadTokens === 'number' ? usage.cachedReadTokens as number : 0;
+      // contextUsed shows total (matches what the model "sees"), but we also emit cached for the UI.
+      const contextUsed: number | undefined = inputTokens > 0 ? inputTokens : undefined;
+      const contextSize: number | undefined = (
+        typeof meta?.contextLength === 'number' && meta.contextLength > 0 ? meta.contextLength as number :
+        undefined
+      );
+      this.log(`[session] prompt done ${sessionId}${contextUsed ? ` used=${contextUsed}` : ''}${cachedTokens ? ` cached=${cachedTokens}` : ''}${contextSize ? ` size=${contextSize}` : ''}`);
+      this.updateHandler?.({ session_id: sessionId, done: true, contextUsed, contextSize, cachedTokens });
+    } finally {
+      if (this.activePromptTurn === turn) this.activePromptTurn = null;
+    }
   }
 
   async cancel(): Promise<void> {
-    this.cancelled = true;
-    this.log('[session] cancel requested');
-    if (!this.sessionId) return;
-    // session/cancel is a notification in ACP — no id, no response expected
-    // sendPrompt intentionally remains pending until session/prompt terminates.
-    this.client.notify('session/cancel', { sessionId: this.sessionId });
+    const turn = this.activePromptTurn;
+    if (!turn) {
+      this.log('[session] cancel requested with no active turn');
+      return;
+    }
+    this.log(`[session] cancel requested turn ${turn.id}`);
+    turn.cancelled = true;
+    if (!turn.promptActive || !turn.sessionId) return;
+    // session/cancel is a notification in ACP — no id, no response expected.
+    // Binding-only cancellation is local because no session/prompt exists yet.
+    // Once prompting starts, sendPrompt remains pending until that call terminates.
+    this.client.notify('session/cancel', { sessionId: turn.sessionId });
   }
 
   reset(): void {
@@ -270,13 +294,13 @@ export class SessionManager {
 
     switch (kind) {
       case 'agent_message_chunk': {
-        if (this.cancelled) return;
+        if (this.activePromptTurn?.cancelled) return;
         const text = extractTextContent(update);
         if (text === null) return;
         const meta = update['_meta'] as Record<string, unknown> | undefined;
         const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
         const isBackground = hermesMeta?.backgroundNotification === true
-          || (!this.promptActive && !this.replayActive);
+          || (!(this.activePromptTurn?.promptActive ?? false) && !this.replayActive);
         event.background = isBackground;
         event.backgroundProcess = parseBackgroundProcessMeta(update);
         if (isBackground) {
@@ -296,7 +320,7 @@ export class SessionManager {
       }
 
       case 'agent_thought_chunk': {
-        if (this.cancelled) return;
+        if (this.activePromptTurn?.cancelled) return;
         const text = extractTextContent(update);
         if (text?.trim()) event.thinkingText = text;
         else return;
@@ -304,7 +328,7 @@ export class SessionManager {
       }
 
       case 'tool_call': {
-        if (this.cancelled) return;
+        if (this.activePromptTurn?.cancelled) return;
         const parsed = parseToolCall(update);
         event.toolTitle = parsed.title;
         event.toolStatus = parsed.status;
@@ -320,7 +344,7 @@ export class SessionManager {
       }
 
       case 'tool_call_update': {
-        if (this.cancelled) return;
+        if (this.activePromptTurn?.cancelled) return;
         const parsed = parseToolCallUpdate(update);
         event.toolCallId = parsed.toolCallId;
         event.toolStatus = parsed.status;
