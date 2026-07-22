@@ -43,6 +43,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private view?: vscode.WebviewView;
   private busy = false;
+  private activeRequest?: PromptRequest;
   private messageQueue: PromptRequest[] = [];
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
@@ -87,8 +88,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       ],
     };
 
-    webviewView.webview.html = this.buildHtml(webviewView.webview);
-
     // Create first session if none exist
     this.store.ensureSession();
 
@@ -98,17 +97,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.session.setStoredSessionId(active.acpSessionId);
       this.log(`[session] will attempt resume of ACP session ${active.acpSessionId}`);
     }
-
-    // Emit initial state
-    setTimeout(() => {
-      this.post({ type: 'statusBar', model: this.initialModel, version: this.hermesVersion, skillGroups: this.skillGroups });
-      this.broadcastProfileState();
-      this.broadcastSessions(this.store);
-      // Restore last session's history into the view
-      if (active && active.messages.length > 0) {
-        this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
-      }
-    }, 150);
 
     webviewView.webview.onDidReceiveMessage((msg: FromWebview) => {
       void this.handleFromWebview(msg);
@@ -212,10 +200,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
       }
     });
+
+    // Load the document only after its message and session-update handlers exist.
+    webviewView.webview.html = this.buildHtml(webviewView.webview);
   }
 
   post(msg: ToWebview): void {
     this.view?.webview.postMessage(msg);
+  }
+
+  private emitInitialState(): void {
+    const active = this.store.active();
+    this.post({
+      type: 'queueState',
+      active: this.busy,
+      queued: this.messageQueue.length,
+      activeSlashCommand: this.activeRequest?.isSlashCommand ?? false,
+    });
+    this.post({
+      type: 'statusBar',
+      model: this.initialModel,
+      version: this.hermesVersion,
+      skillGroups: this.skillGroups,
+    });
+    this.broadcastProfileState();
+    this.broadcastSessions(this.store);
+    if (active && active.messages.length > 0) {
+      this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
+    }
   }
 
   dispose(): void {
@@ -281,7 +293,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async handleFromWebview(msg: FromWebview): Promise<void> {
-    if (msg.type === 'send' && msg.text) {
+    if (msg.type === 'ready') {
+      this.emitInitialState();
+
+    } else if (msg.type === 'send' && msg.text) {
       this.log(`[ui] send (${msg.text.length} chars)`);
       const request = this.capturePromptRequest(msg.text, msg.requestId);
       this.enqueueOrRun(request);
@@ -481,6 +496,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async runPrompt(request: PromptRequest): Promise<void> {
     const { text } = request;
     this.log(`[ui] run prompt (${text.length} chars)`);
+    this.activeRequest = request;
 
     // Persist only when the message becomes the active turn. Recording queued
     // input at submit time would place it before the current assistant reply
@@ -556,9 +572,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       }
     } finally {
       this.log('[ui] prompt finished');
-      this.busy = false;
       if (this.messageQueue.length > 0) {
         const next = this.messageQueue.shift()!;
+        this.busy = true;
+        this.activeRequest = next;
         this.post({
           type: 'busy',
           active: true,
@@ -569,6 +586,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
         void this.runPrompt(next);
       } else {
+        this.busy = false;
+        this.activeRequest = undefined;
         this.post({ type: 'busy', active: false, queued: 0 });
       }
     }

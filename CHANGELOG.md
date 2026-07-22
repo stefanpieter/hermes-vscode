@@ -6,6 +6,13 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.11] — 2026-07-22
+
+### Fixed
+
+- Reopening or recreating the chat webview during an active turn now restores the host-owned busy state, queue count, and slash-response semantics through an explicit ready handshake.
+- Composer submissions use UUID-backed identities across webview lifetimes, preventing queued prompts retained by the host from colliding with messages sent from a recreated view.
+
 ## [3.2.10] — 2026-07-22
 
 ### Fixed

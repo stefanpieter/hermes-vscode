@@ -14,6 +14,35 @@ export interface SubmissionQueueState {
   pendingQueuedMessages: QueuedWebviewMessage[];
 }
 
+export interface HydratableWebviewQueueState {
+  isBusy: boolean;
+  queueHydrated: boolean;
+  prevQueueCount: number;
+  pendingSlashResponse: boolean;
+}
+
+export interface HostQueueSnapshot {
+  active: boolean;
+  queued: number;
+  activeSlashCommand: boolean;
+}
+
+/** Build a request ID from a browser-provided UUID, unique across view lifetimes. */
+export function createComposerRequestId(randomUuid: () => string): string {
+  return `composer-${randomUuid()}`;
+}
+
+/** Restore the host-owned runtime state when a webview document is recreated. */
+export function hydrateWebviewQueueState(
+  state: HydratableWebviewQueueState,
+  snapshot: HostQueueSnapshot,
+): void {
+  state.isBusy = snapshot.active;
+  state.queueHydrated = true;
+  state.prevQueueCount = snapshot.queued;
+  state.pendingSlashResponse = snapshot.active && snapshot.activeSlashCommand;
+}
+
 /**
  * Claim the first submission synchronously so another send cannot race the
  * host's asynchronous busy notification. Returns true when this item queued.

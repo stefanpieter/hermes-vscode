@@ -54,6 +54,7 @@ Slash command responses render as centered system messages, not conversation bub
 
 ### Queue & Stop
 - Send follow-ups while busy; they run in order after the active turn
+- Reopening the chat view restores the active queue and response state
 - Use Stop for an explicit hard cancel
 - Gold glow on composer while agent is working
 

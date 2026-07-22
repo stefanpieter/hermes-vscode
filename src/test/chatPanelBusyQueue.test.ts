@@ -103,7 +103,7 @@ test('queues a follow-up submitted while busy without cancelling the active prom
         selectedSkills: string[];
         ideContext: string;
       };
-      handleFromWebview(message: { type: 'send'; text: string; requestId?: string }): Promise<void>;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
     };
     subject.store.ensureSession();
     subject.post = (message) => { posted.push(message); };
@@ -158,6 +158,13 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     assert.deepEqual(subject.attachedFiles, []);
     assert.deepEqual(subject.selectedSkills, []);
     assert.deepEqual(posted.at(-1), { type: 'busy', active: true, queued: 2 });
+
+    await subject.handleFromWebview({ type: 'ready' });
+    assert.deepEqual(
+      posted.filter(message => message.type === 'queueState').at(-1),
+      { type: 'queueState', active: true, queued: 2, activeSlashCommand: false },
+      'a recreated webview must inherit the live host queue state',
+    );
     assert.deepEqual(
       (state.get('hermes.sessions') as Array<{ messages: Array<{ role: string; text: string }> }>)[0].messages,
       [{ role: 'user', text: 'Start the long task' }],
@@ -312,6 +319,12 @@ test('queues model changes and keeps local title changes out of ACP while busy',
       && message.startedSlashCommand === true
       && message.startedRequestId === undefined
     ), 'an idle host-only command should announce its slash-response semantics');
+    await subject.handleFromWebview({ type: 'ready' });
+    assert.deepEqual(
+      posted.filter(message => message.type === 'queueState').at(-1),
+      { type: 'queueState', active: true, queued: 0, activeSlashCommand: true },
+      'a recreated webview must preserve the active slash-response styling',
+    );
     promptResolvers.shift()?.();
     await new Promise(resolve => setImmediate(resolve));
   } finally {
