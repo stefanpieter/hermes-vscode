@@ -49,6 +49,7 @@ class BindingRaceClient {
   notificationHandler: ((method: string, params: unknown) => void) | null = null;
   incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   sessionNewResolve: (() => void) | null = null;
+  sessionLoadResolve: (() => void) | null = null;
   calls: Array<{ method: string; params: unknown }> = [];
   notifications: Array<{ method: string; params: unknown }> = [];
 
@@ -65,6 +66,10 @@ class BindingRaceClient {
     if (method === 'session/new') {
       await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
       return { sessionId: 'binding-session' };
+    }
+    if (method === 'session/load') {
+      await new Promise<void>(resolve => { this.sessionLoadResolve = resolve; });
+      return {};
     }
     return {};
   }
@@ -124,6 +129,67 @@ test('Stop during first-session binding cancels that turn before queued work sta
     );
     const storedSessions = state.get('hermes.sessions') as Array<{ acpSessionId?: string }>;
     assert.equal(storedSessions[0].acpSessionId, 'binding-session');
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('Stop during stored-session loading cancels that turn before queued work starts', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-load-cancel-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const client = new BindingRaceClient();
+  const session = new SessionManager(client as never);
+  session.setStoredSessionId('stored-session');
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Cancel while loading', requestId: 'active-load' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(client.calls.map(call => call.method), ['session/load']);
+
+    await subject.handleFromWebview({ type: 'send', text: 'Run after load cancellation', requestId: 'queued-load' });
+    await subject.handleFromWebview({ type: 'cancel' });
+    client.sessionLoadResolve?.();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    const promptTexts = client.calls
+      .filter(call => call.method === 'session/prompt')
+      .map(call => ((call.params as { prompt: Array<{ text: string }> }).prompt[0].text));
+    assert.deepEqual(
+      promptTexts,
+      ['Run after load cancellation'],
+      'Stop during session/load must cancel the owned turn instead of starting its session/prompt',
+    );
+    assert.equal(
+      client.notifications.some(notification => notification.method === 'session/cancel'),
+      false,
+      'binding-only Stop must not cancel a session that has no active session/prompt',
+    );
+    const storedSessions = state.get('hermes.sessions') as Array<{ acpSessionId?: string }>;
+    assert.equal(storedSessions[0].acpSessionId, 'stored-session');
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }
