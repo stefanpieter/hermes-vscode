@@ -16,8 +16,17 @@ import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { bindPromptSession } from './promptSessionBinding';
 import { sessionSwitchUiMessages } from './sessionSwitchUi';
+import { isKnownSlashCommand } from './slashCommands';
 import type { ProfileMenuItem } from './profileUi';
-import type { BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
+import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
+
+interface PromptRequest {
+  text: string;
+  isSlashCommand: boolean;
+  attachedFiles: AttachedFile[];
+  selectedSkills: string[];
+  ideContext: string;
+}
 
 export interface ProfileController {
   currentProfile(): string;
@@ -33,7 +42,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private view?: vscode.WebviewView;
   private busy = false;
-  private messageQueue: string[] = [];
+  private messageQueue: PromptRequest[] = [];
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
   private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
@@ -273,52 +282,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private async handleFromWebview(msg: FromWebview): Promise<void> {
     if (msg.type === 'send' && msg.text) {
       this.log(`[ui] send (${msg.text.length} chars)`);
-      // Store user message in history (skip slash commands)
-      if (!msg.text.startsWith('/')) {
-        const newTitle = this.store.autoTitle(msg.text);
-        if (newTitle) {
-          this.post({ type: 'statusBar', sessionTitle: newTitle });
-          this.broadcastSessions(this.store);
-        }
-        this.store.addUserMessage(msg.text);
-      } else {
-        // Slash command — detect /title X and sync extension's local title
-        // The adapter processes the command and updates its own state; we mirror it locally.
-        const titleMatch = /^\/title\s+(.+?)\s*$/i.exec(msg.text);
-        if (titleMatch) {
-          const newTitle = titleMatch[1].trim();
-          const activeId = this.store.activeId;
-          if (activeId && newTitle) {
-            this.store.rename(activeId, newTitle);
-            this.post({ type: 'statusBar', sessionTitle: newTitle.slice(0, 60) });
-            this.broadcastSessions(this.store);
-            this.log(`[ui] /title synced locally: ${newTitle}`);
-          }
-        }
-      }
-
-      // Build context annotation — 1 item per line
-      const lines: string[] = [];
-      for (const f of this.attachedFiles) {
-        lines.push(`<span class="ctx-line"><span class="ctx-icon">⊕</span>${f.name}</span>`);
-      }
-      for (const s of this.selectedSkills) {
-        lines.push(`<span class="ctx-line"><span class="ctx-icon">✦</span>${s}</span>`);
-      }
-      if (lines.length > 0) {
-        this.post({ type: 'statusBar', contextAnnotation: lines.join('') });
-      }
-
-      if (this.busy) {
-        this.log('[ui] queue + interrupt');
-        this.messageQueue.push(msg.text);
-        this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
-        // Interrupt: cancel current prompt so queue drains immediately
-        // (matches Hermes TUI busy_input_mode: interrupt)
-        await this.session.cancel();
-      } else {
-        void this.runPrompt(msg.text);
-      }
+      const request = this.capturePromptRequest(msg.text);
+      this.enqueueOrRun(request);
 
     } else if (msg.type === 'cancel') {
       this.log(`[ui] cancel (${this.messageQueue.length} queued kept)`);
@@ -330,13 +295,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     } else if (msg.type === 'switchModel' && msg.model) {
       this.log(`[ui] switch model ${msg.model}`);
       const command = `/model ${msg.model}`;
-      this.messageQueue = [];
-      this.lastTurnText = '';
-      this.lastTurnTools = [];
-      if (this.busy) {
-        await this.session.cancel();
-      }
-      void this.runPrompt(command);
+      this.enqueueOrRun(this.createCommandRequest(command));
 
     } else if (msg.type === 'newSession') {
       this.log('[ui] new session');
@@ -423,7 +382,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.broadcastSessions(this.store);
         if (msg.sessionId === this.store.activeId) {
           this.post({ type: 'statusBar', sessionTitle: newName.trim().slice(0, 60) });
-          void this.runPrompt(`/title ${newName.trim().slice(0, 60)}`);
         }
       }
 
@@ -472,36 +430,104 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.post({ type: 'statusBar', attachedFiles: this.attachedFiles.map(f => ({ name: f.name, path: f.path })) });
   }
 
-  private async runPrompt(text: string): Promise<void> {
+  /** Snapshot composer-owned context so later input cannot mutate a queued turn. */
+  private capturePromptRequest(text: string): PromptRequest {
+    const isSlashCommand = isKnownSlashCommand(text);
+    const request: PromptRequest = {
+      text,
+      isSlashCommand,
+      // The webview clears composer chips when any message is sent. Slash
+      // commands have no user bubble and do not accept composer context, so
+      // discard it here rather than annotating the previous prose turn.
+      attachedFiles: isSlashCommand ? [] : this.attachedFiles.map(file => ({ ...file })),
+      selectedSkills: isSlashCommand ? [] : [...this.selectedSkills],
+      ideContext: isSlashCommand ? '' : this.collectIdeContext(),
+    };
+
+    if (this.attachedFiles.length > 0) {
+      this.attachedFiles = [];
+      this.post({ type: 'statusBar', attachedFiles: [] });
+    }
+    if (this.selectedSkills.length > 0) {
+      this.selectedSkills = [];
+      this.post({ type: 'statusBar', selectedSkills: [] });
+    }
+    return request;
+  }
+
+  private createCommandRequest(text: string): PromptRequest {
+    return {
+      text,
+      isSlashCommand: isKnownSlashCommand(text),
+      attachedFiles: [],
+      selectedSkills: [],
+      ideContext: '',
+    };
+  }
+
+  /** Serialize every prompt-producing action behind the active ACP turn. */
+  private enqueueOrRun(request: PromptRequest): void {
+    if (this.busy) {
+      this.log(`[ui] queued (${request.text})`);
+      this.messageQueue.push(request);
+      this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
+      return;
+    }
+    void this.runPrompt(request);
+  }
+
+  private async runPrompt(request: PromptRequest): Promise<void> {
+    const { text } = request;
     this.log(`[ui] run prompt (${text.length} chars)`);
+
+    // Persist only when the message becomes the active turn. Recording queued
+    // input at submit time would place it before the current assistant reply
+    // in restored history.
+    if (!request.isSlashCommand) {
+      const newTitle = this.store.autoTitle(text);
+      if (newTitle) {
+        this.post({ type: 'statusBar', sessionTitle: newTitle });
+        this.broadcastSessions(this.store);
+      }
+      this.store.addUserMessage(text);
+    }
+
+    // Build context annotation when the matching user bubble is rendered.
+    const lines: string[] = [];
+    for (const f of request.attachedFiles) {
+      lines.push(`<span class="ctx-line"><span class="ctx-icon">⊕</span>${f.name}</span>`);
+    }
+    for (const s of request.selectedSkills) {
+      lines.push(`<span class="ctx-line"><span class="ctx-icon">✦</span>${s}</span>`);
+    }
+    if (lines.length > 0) {
+      this.post({ type: 'statusBar', contextAnnotation: lines.join('') });
+    }
+
     this.busy = true;
     this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
     const cwd = this.resolveWorkingDirectory();
 
     // Prepend IDE context + attached file for regular messages (not slash commands)
     let prompt = text;
-    if (!text.startsWith('/')) {
-      const ctx = this.collectIdeContext();
+    if (!request.isSlashCommand) {
+      const ctx = request.ideContext;
       if (ctx) {
         prompt = ctx + prompt;
         this.log(`[ui] attached IDE context (${ctx.length} chars)`);
       }
 
-      // Inject selected skills as advice
-      if (this.selectedSkills.length > 0) {
-        prompt = `I advise you to use the following skills: ${this.selectedSkills.join(', ')}\n\n${prompt}`;
-        this.log(`[ui] advised skills: ${this.selectedSkills.join(', ')}`);
-        this.selectedSkills = [];
-        this.post({ type: 'statusBar', selectedSkills: [] });
+      // Inject the skills captured with this composer submission.
+      if (request.selectedSkills.length > 0) {
+        prompt = `I advise you to use the following skills: ${request.selectedSkills.join(', ')}\n\n${prompt}`;
+        this.log(`[ui] advised skills: ${request.selectedSkills.join(', ')}`);
       }
 
-      // Attach file paths as references (agent reads on demand via file tools)
-      if (this.attachedFiles.length > 0) {
-        const refs = this.attachedFiles.map(f => `[Referenced file: ${f.path}]`).join('\n');
+      // Attach the file paths captured with this composer submission.
+      if (request.attachedFiles.length > 0) {
+        const refs = request.attachedFiles.map(f => `[Referenced file: ${f.path}]`).join('\n');
         prompt = refs + '\n\n' + prompt;
-        this.log(`[ui] attached ${this.attachedFiles.length} file ref(s)`);
-        this.attachedFiles = [];
-        this.post({ type: 'statusBar', attachedFiles: [] });
+        this.log(`[ui] attached ${request.attachedFiles.length} file ref(s)`);
       }
     }
 
@@ -523,7 +549,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.busy = false;
       if (this.messageQueue.length > 0) {
         const next = this.messageQueue.shift()!;
-        this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
+        this.post({
+          type: 'busy',
+          active: true,
+          queued: this.messageQueue.length,
+          startedText: next.text,
+          startedSlashCommand: next.isSlashCommand,
+        });
         void this.runPrompt(next);
       } else {
         this.post({ type: 'busy', active: false, queued: 0 });

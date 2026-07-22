@@ -7,6 +7,8 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { ToWebview, FromWebview, TodoItem } from '../types';
 import { createInitialState } from './state';
+import { acknowledgeStartedQueuedMessage } from '../webviewQueue';
+import { isKnownSlashCommand } from '../slashCommands';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
   formatToolDisplay, renderTodoOverlay, detectTodoUpdate,
@@ -133,28 +135,11 @@ function scheduleFlush(): void {
   if (!S.flushScheduled) { S.flushScheduled = true; setTimeout(flushPending, 0); }
 }
 
-// ── Slash command detection ─────────────────────────
-// Hardcoded allowlist mirroring the ACP adapter's _SLASH_COMMANDS dict.
-// Keep in sync with ~/.hermes/hermes-agent/acp_adapter/server.py. Commands
-// not in this set are treated as prose and go to the LLM normally (so the
-// user bubble renders). Matched commands hide the user bubble and the
-// response renders as a centered system-style bubble instead of an agent bubble.
-const KNOWN_SLASH_COMMANDS = new Set([
-  'help', 'model', 'tools', 'context', 'reset', 'compact', 'version',
-  'title', 'yolo', 'new', 'retry', 'status', 'usage', 'compress',
-  'reasoning', 'save',
-]);
-function isSlashCommand(text: string): boolean {
-  if (!text.startsWith('/')) return false;
-  const first = text.slice(1).split(/\s/, 1)[0].toLowerCase();
-  return KNOWN_SLASH_COMMANDS.has(first);
-}
-
 // ── Send ─────────────────────────────────────────────
 function send(): void {
   const text = inputEl.value.trim();
   if (!text) return;
-  const isSlash = isSlashCommand(text);
+  const isSlash = isKnownSlashCommand(text);
   inputEl.value = '';
   inputEl.style.height = '';
   attachChip.style.display = 'none'; attachChip.innerHTML = '';
@@ -169,10 +154,16 @@ function send(): void {
     S.pendingSlashResponse = isSlash;
     if (!isSlash) showWaiting(messagesEl);
   } else {
-    S.pendingQueuedTexts.push(text);
+    S.pendingQueuedMessages.push({ text, isSlashCommand: isSlash });
   }
   vscode.postMessage({ type: 'send', text });
   requestAnimationFrame(syncComposerHeight);
+}
+
+/** Route every slash/menu action through the same queue-aware send path. */
+function sendText(text: string): void {
+  inputEl.value = text;
+  send();
 }
 
 // ── Event wiring ─────────────────────────────────────
@@ -233,7 +224,7 @@ function promptForArg(cmd: string, label: string): void {
       ev.preventDefault();
       const arg = cmdArgInput.value.trim();
       hideCmdArg();
-      if (arg) vscode.postMessage({ type: 'send', text: `${cmd} ${arg}` });
+      if (arg) sendText(`${cmd} ${arg}`);
     } else if (ev.key === 'Escape') {
       ev.preventDefault();
       hideCmdArg();
@@ -257,11 +248,11 @@ overflowMenu.addEventListener('click', (e) => {
   closeFn();
 
   if (mode === 'execute') {
-    vscode.postMessage({ type: 'send', text: cmd });
+    sendText(cmd);
   } else if (mode === 'confirm') {
     const msg = item.dataset.confirm ?? `Run ${cmd}?`;
     // eslint-disable-next-line no-alert
-    if (confirm(msg)) vscode.postMessage({ type: 'send', text: cmd });
+    if (confirm(msg)) sendText(cmd);
   } else if (mode === 'prompt') {
     promptForArg(cmd, item.dataset.argLabel ?? 'Argument');
   }
@@ -349,11 +340,7 @@ setupSkillsHandlers(skillsMenu, skillsBtn, vscode, S);
 document.querySelectorAll<HTMLButtonElement>('.cmd-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const cmd = btn.dataset.cmd; if (!cmd) return;
-    if (!S.isBusy) {
-      S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
-      showWaiting(messagesEl);
-    }
-    vscode.postMessage({ type: 'send', text: cmd });
+    sendText(cmd);
   });
 });
 
@@ -431,10 +418,13 @@ window.addEventListener('message', (e: MessageEvent) => {
 
     case 'busy': {
       const newQueued = msg.queued ?? 0;
-      if (msg.active && newQueued < S.prevQueueCount) {
-        if (S.pendingQueuedTexts.length > 0) appendMessage(messagesEl, 'user', S.pendingQueuedTexts.shift()!);
+      if (msg.active && msg.startedText !== undefined && msg.startedSlashCommand !== undefined) {
+        const next = acknowledgeStartedQueuedMessage(S, msg.startedText, msg.startedSlashCommand);
         S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
-        showWaiting(messagesEl);
+        if (next?.renderUserMessage) {
+          appendMessage(messagesEl, 'user', next.text);
+        }
+        if (next?.showWaiting) showWaiting(messagesEl);
       }
       S.prevQueueCount = newQueued;
       setBusy(msg.active ?? false, newQueued);
@@ -493,7 +483,7 @@ window.addEventListener('message', (e: MessageEvent) => {
 
     case 'clear':
       messagesEl.innerHTML = '';
-      S.pendingQueuedTexts = []; S.prevQueueCount = 0; S.knownContextSize = 0; S.flushScheduled = false;
+      S.pendingQueuedMessages = []; S.prevQueueCount = 0; S.knownContextSize = 0; S.flushScheduled = false;
       ctxBarWrap.style.display = 'none';
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       setBusy(false);
