@@ -15,7 +15,7 @@ import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { sendPromptWithSessionBinding } from './promptSessionBinding';
-import { sessionSwitchUiMessages } from './sessionSwitchUi';
+import { sessionReadyUiMessages, sessionSwitchUiMessages } from './sessionSwitchUi';
 import { isKnownSlashCommand } from './slashCommands';
 import type { ProfileMenuItem } from './profileUi';
 import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
@@ -223,6 +223,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       version: this.hermesVersion,
       skillGroups: this.skillGroups,
     });
+    for (const update of sessionReadyUiMessages(
+      this.backgroundProcessesFor(active?.acpSessionId),
+    )) this.post(update);
     this.broadcastProfileState();
     this.broadcastSessions(this.store);
     if (active && active.messages.length > 0) {

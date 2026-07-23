@@ -6,6 +6,12 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.13] — 2026-07-23
+
+### Fixed
+
+- Reopening or recreating the chat webview now restores the active session's persistent background-work indicator, so a running supervised Lead/worker remains visibly pulsing after the panel's ready handshake.
+
 ## [3.2.12] — 2026-07-22
 
 ### Fixed
