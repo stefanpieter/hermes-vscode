@@ -145,7 +145,7 @@
     "vscode:prepublish": "npm run build",
     "build": "webpack --mode production",
     "lint": "tsc --noEmit",
-    "secrets": "secretlint --secretlintrc .secretlintrc.json \"*.{md,json,js,ts,yml,yaml}\" \"src/**/*.{ts,json}\" \"tests/**/*.ts\" \".github/**/*.{md,yml,yaml}\" \"docs/**/*.md\" \"resources/**/*.md\"",
+    "secrets": "secretlint --secretlintrc .secretlintrc.json \"*.{md,json,js,ts,yml,yaml}\" \"src/**/*.{ts,json}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \"tests/**/*.ts\" \".github/**/*.{md,yml,yaml}\" \"docs/**/*.md\" \"resources/**/*.md\"",
     "test": "npm run test:profile && npm run test:background",
     "posttest": "node -e \"require('node:fs').rmSync('out-test', { recursive: true, force: true })\"",
     "dev": "webpack --mode development --watch",
@@ -154,7 +154,7 @@
     "audit": "npm audit --audit-level=high",
     "verify": "npm run lint && npm run secrets && npm test && npm run build && npm run audit && npm run package:verify",
     "test:profile": "tsc --module commonjs --target ES2020 --types node --skipLibCheck --esModuleInterop --strict --outDir out-test tests/acpLaunchArgs.test.ts tests/profileUi.test.ts src/acpLaunchArgs.ts src/profileUi.ts && node out-test/tests/acpLaunchArgs.test.js && node out-test/tests/profileUi.test.js",
-    "test:background": "tsx --test src/test/**/*.test.ts"
+    "test:background": "node scripts/run-background-tests.mjs"
   },
   "devDependencies": {
     "@secretlint/secretlint-rule-preset-recommend": "^10.2.2",

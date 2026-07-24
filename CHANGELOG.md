@@ -11,7 +11,9 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 ### Maintenance
 
 - Added transparent maintained-fork governance, contribution, security, release, and migration policies while the upstream repository and Marketplace handover is discussed.
-- Added cross-platform CI for type checking, secret scanning, regression tests, production builds, dependency security auditing, and deterministic VSIX package inspection without publicly uploading an unauthorised publisher identity.
+- Added cross-platform CI for type checking, secret scanning, regression tests, production builds, dependency security auditing, and deterministic VSIX package inspection without publicly uploading an unauthorised publisher artefact.
+- Made background-test discovery independent of shell glob expansion so the suite runs consistently on Linux, macOS, and Windows CI; branch pushes now run separately only for `main` to avoid duplicate pull-request jobs.
+- Added a single `npm run verify` release gate and removed generated profile test output after successful runs.
 - Updated DOMPurify and the VSIX packaging toolchain to eliminate known dependency advisories from the locked build.
 - Removed private machine assumptions and stale Hermes Agent links from contributor documentation.
 
