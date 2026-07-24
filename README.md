@@ -30,6 +30,7 @@ See the [governance policy](https://github.com/stefanpieter/hermes-vscode/blob/m
 1. A supported VS Code release (`^1.85.0` or newer).
 2. A working Hermes Agent installation.
 3. `hermes` available on `PATH`, or an explicit trusted path in `hermes.path`.
+4. A trusted workspace. The extension remains disabled in VS Code Restricted Mode because it launches an autonomous local agent with access to the current workspace.
 
 Use the current [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs) for installation, providers, profiles, and ACP configuration.
 

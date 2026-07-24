@@ -17,6 +17,7 @@ import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgrou
 import { sendPromptWithSessionBinding } from './promptSessionBinding';
 import { sessionReadyUiMessages, sessionSwitchUiMessages } from './sessionSwitchUi';
 import { isKnownSlashCommand } from './slashCommands';
+import { normalizePastedImageExtension } from './pastedImage';
 import { deleteQueuedMessage, editQueuedMessage, editableQueuedMessages } from './webviewQueue';
 import type { ProfileMenuItem } from './profileUi';
 import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
@@ -393,7 +394,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     } else if (msg.type === 'pasteImage' && msg.data && msg.ext) {
       // Save pasted image to the extension's media cache so the webview never exposes arbitrary local paths.
-      const tmpPath = path.join(this.mediaRoot, `hermes-paste-${Date.now()}.${msg.ext}`);
+      const extension = normalizePastedImageExtension(msg.ext);
+      if (!extension) {
+        this.log('[security] rejected pasted image with unsupported extension');
+        return;
+      }
+      const tmpPath = path.join(this.mediaRoot, `hermes-paste-${Date.now()}.${extension}`);
       try {
         fs.writeFileSync(tmpPath, Buffer.from(msg.data, 'base64'));
         this.log('[ui] pasted image cached');

@@ -60,6 +60,12 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Hermes launches an autonomous local agent with access to the current workspace."
+    }
+  },
   "qna": "https://github.com/stefanpieter/hermes-vscode/issues",
   "contributes": {
     "commands": [

@@ -17,6 +17,11 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Updated DOMPurify and the VSIX packaging toolchain to eliminate known dependency advisories from the locked build.
 - Removed private machine assumptions and stale Hermes Agent links from contributor documentation.
 
+### Security
+
+- Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
+- Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
+
 ## [3.3.0] — 2026-07-24
 
 ### Added
