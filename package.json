@@ -2,9 +2,18 @@
   "name": "hermes-ai-agent",
   "displayName": "Hermes AI Agent",
   "description": "VS Code sidebar for the Hermes AI agent. Streams chat, runs tools, manages sessions. Multi-model (Claude, Codex). Communicates over ACP.",
-  "version": "3.2.12",
+  "version": "3.3.0",
   "publisher": "joaompfp",
-  "author": "joao",
+  "author": {
+    "name": "Joao Peixoto",
+    "url": "https://github.com/joaompfp"
+  },
+  "contributors": [
+    {
+      "name": "Stefan van Biljon",
+      "url": "https://github.com/stefanpieter"
+    }
+  ],
   "license": "MIT",
   "keywords": [
     "ai agent",
@@ -24,13 +33,13 @@
     "streaming",
     "remote ssh"
   ],
-  "homepage": "https://github.com/joaompfp/hermes-vscode",
+  "homepage": "https://github.com/stefanpieter/hermes-vscode",
   "bugs": {
-    "url": "https://github.com/joaompfp/hermes-vscode/issues"
+    "url": "https://github.com/stefanpieter/hermes-vscode/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/joaompfp/hermes-vscode"
+    "url": "https://github.com/stefanpieter/hermes-vscode"
   },
   "icon": "resources/hermes-logo-128.png",
   "galleryBanner": {
@@ -51,7 +60,13 @@
   ],
   "activationEvents": [],
   "main": "./dist/extension.js",
-  "qna": "https://github.com/joaompfp/hermes-vscode/issues",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Hermes launches an autonomous local agent with access to the current workspace."
+    }
+  },
+  "qna": "https://github.com/stefanpieter/hermes-vscode/issues",
   "contributes": {
     "commands": [
       {
@@ -135,25 +150,34 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "webpack --mode production",
-    "test": "npm run test:profile && npm run test:background",
+    "lint": "tsc --noEmit",
+    "secrets": "secretlint --secretlintrc .secretlintrc.json \"*.{md,json,js,ts,yml,yaml}\" \"src/**/*.{ts,json}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \"tests/**/*.ts\" \".github/**/*.{md,yml,yaml}\" \"docs/**/*.md\" \"resources/**/*.md\"",
+    "test": "npm run test:profile && npm run test:background && npm run test:audit-policy",
+    "posttest": "node -e \"require('node:fs').rmSync('out-test', { recursive: true, force: true })\"",
     "dev": "webpack --mode development --watch",
     "package": "vsce package --no-dependencies",
+    "package:verify": "npm run package -- --out hermes-ai-agent-ci.vsix && vsce ls",
+    "audit": "node scripts/audit-all-locked.mjs",
+    "verify": "npm run lint && npm run secrets && npm test && npm run build && npm run audit && npm run package:verify",
     "test:profile": "tsc --module commonjs --target ES2020 --types node --skipLibCheck --esModuleInterop --strict --outDir out-test tests/acpLaunchArgs.test.ts tests/profileUi.test.ts src/acpLaunchArgs.ts src/profileUi.ts && node out-test/tests/acpLaunchArgs.test.js && node out-test/tests/profileUi.test.js",
-    "test:background": "tsx --test src/test/**/*.test.ts"
+    "test:background": "node scripts/run-background-tests.mjs",
+    "test:audit-policy": "node --test scripts/audit-all-locked.test.mjs"
   },
   "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "^10.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^2.22.0",
+    "@vscode/vsce": "^3.9.2",
+    "secretlint": "^10.2.2",
     "ts-loader": "^9.5.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.3.0",
     "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4",
-    "tsx": "^4.20.6"
+    "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "dompurify": "^3.3.3",
-    "marked": "^17.0.5"
+    "dompurify": "^3.4.12",
+    "marked": "^17.0.6"
   }
 }

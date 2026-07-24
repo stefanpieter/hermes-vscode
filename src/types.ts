@@ -5,6 +5,7 @@
 
 import type { SkillGroup } from './skillCatalog';
 import type { ProfileMenuItem } from './profileUi';
+import type { QueuedWebviewMessage } from './webviewQueue';
 
 // ── Session & History ────────────────────────────────
 
@@ -92,6 +93,7 @@ export interface ToWebview {
   status?: string;
   active?: boolean;
   queued?: number;
+  queuedItems?: QueuedWebviewMessage[];
   startedText?: string;
   startedSlashCommand?: boolean;
   startedRequestId?: string;
@@ -118,7 +120,7 @@ export interface ToWebview {
 
 export interface FromWebview {
   type:
-    | 'ready' | 'send' | 'switchModel' | 'cancel'
+    | 'ready' | 'send' | 'editQueuedMessage' | 'deleteQueuedMessage' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
     | 'toggleSkill' | 'renameSession' | 'deleteSession'

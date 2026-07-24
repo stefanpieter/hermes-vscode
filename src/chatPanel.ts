@@ -15,8 +15,10 @@ import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { sendPromptWithSessionBinding } from './promptSessionBinding';
-import { sessionSwitchUiMessages } from './sessionSwitchUi';
+import { sessionReadyUiMessages, sessionSwitchUiMessages } from './sessionSwitchUi';
 import { isKnownSlashCommand } from './slashCommands';
+import { normalizePastedImageExtension } from './pastedImage';
+import { deleteQueuedMessage, editQueuedMessage, editableQueuedMessages } from './webviewQueue';
 import type { ProfileMenuItem } from './profileUi';
 import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
 
@@ -209,25 +211,35 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.view?.webview.postMessage(msg);
   }
 
-  private emitInitialState(): void {
-    const active = this.store.active();
+  private postQueueState(): void {
     this.post({
       type: 'queueState',
       active: this.busy,
       queued: this.messageQueue.length,
       activeSlashCommand: this.activeRequest?.isSlashCommand ?? false,
+      queuedItems: editableQueuedMessages(this.messageQueue),
     });
+  }
+
+  private emitInitialState(): void {
+    const active = this.store.active();
     this.post({
       type: 'statusBar',
       model: this.initialModel,
       version: this.hermesVersion,
       skillGroups: this.skillGroups,
     });
+    for (const update of sessionReadyUiMessages(
+      this.backgroundProcessesFor(active?.acpSessionId),
+    )) this.post(update);
     this.broadcastProfileState();
     this.broadcastSessions(this.store);
     if (active && active.messages.length > 0) {
       this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
     }
+    // queueState is the final ready-handshake message: history is now rendered,
+    // so live start events can safely append without duplicating persisted input.
+    this.postQueueState();
   }
 
   dispose(): void {
@@ -301,6 +313,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       const request = this.capturePromptRequest(msg.text, msg.requestId);
       this.enqueueOrRun(request);
 
+    } else if (msg.type === 'editQueuedMessage' && msg.requestId) {
+      const text = msg.text?.trim();
+      if (text) {
+        const queued = editQueuedMessage(
+          this.messageQueue,
+          msg.requestId,
+          text,
+          isKnownSlashCommand(text),
+        );
+        if (queued?.isSlashCommand) {
+          queued.attachedFiles = [];
+          queued.selectedSkills = [];
+          queued.ideContext = '';
+        }
+      }
+      this.postQueueState();
+
+    } else if (msg.type === 'deleteQueuedMessage' && msg.requestId) {
+      deleteQueuedMessage(this.messageQueue, msg.requestId);
+      this.postQueueState();
+
     } else if (msg.type === 'cancel') {
       this.log(`[ui] cancel (${this.messageQueue.length} queued kept)`);
       // Don't clear the queue — queued messages should be sent after cancel
@@ -361,7 +394,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     } else if (msg.type === 'pasteImage' && msg.data && msg.ext) {
       // Save pasted image to the extension's media cache so the webview never exposes arbitrary local paths.
-      const tmpPath = path.join(this.mediaRoot, `hermes-paste-${Date.now()}.${msg.ext}`);
+      const extension = normalizePastedImageExtension(msg.ext);
+      if (!extension) {
+        this.log('[security] rejected pasted image with unsupported extension');
+        return;
+      }
+      const tmpPath = path.join(this.mediaRoot, `hermes-paste-${Date.now()}.${extension}`);
       try {
         fs.writeFileSync(tmpPath, Buffer.from(msg.data, 'base64'));
         this.log('[ui] pasted image cached');
@@ -487,7 +525,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (this.busy) {
       this.log(`[ui] queued (${request.text})`);
       this.messageQueue.push(request);
-      this.post({ type: 'busy', active: true, queued: this.messageQueue.length });
+      this.post({
+        type: 'busy',
+        active: true,
+        queued: this.messageQueue.length,
+        queuedItems: editableQueuedMessages(this.messageQueue),
+      });
       return;
     }
     void this.runPrompt(request);
@@ -518,20 +561,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     for (const s of request.selectedSkills) {
       lines.push(`<span class="ctx-line"><span class="ctx-icon">✦</span>${s}</span>`);
     }
-    if (lines.length > 0) {
-      this.post({ type: 'statusBar', contextAnnotation: lines.join('') });
-    }
 
     this.busy = true;
     this.post({
       type: 'busy',
       active: true,
       queued: this.messageQueue.length,
-      ...(request.requestId === undefined ? {
-        startedText: text,
-        startedSlashCommand: request.isSlashCommand,
-      } : {}),
+      queuedItems: editableQueuedMessages(this.messageQueue),
+      startedText: text,
+      startedSlashCommand: request.isSlashCommand,
+      ...(request.requestId ? { startedRequestId: request.requestId } : {}),
     });
+    // The acknowledgement above renders the matching user bubble first.
+    if (lines.length > 0) {
+      this.post({ type: 'statusBar', contextAnnotation: lines.join('') });
+    }
     const cwd = this.resolveWorkingDirectory();
 
     // Prepend IDE context + attached file for regular messages (not slash commands)
@@ -574,20 +618,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (this.messageQueue.length > 0) {
         const next = this.messageQueue.shift()!;
         this.busy = true;
-        this.activeRequest = next;
-        this.post({
-          type: 'busy',
-          active: true,
-          queued: this.messageQueue.length,
-          startedText: next.text,
-          startedSlashCommand: next.isSlashCommand,
-          ...(next.requestId ? { startedRequestId: next.requestId } : {}),
-        });
         void this.runPrompt(next);
       } else {
         this.busy = false;
         this.activeRequest = undefined;
-        this.post({ type: 'busy', active: false, queued: 0 });
+        this.post({ type: 'busy', active: false, queued: 0, queuedItems: [] });
       }
     }
   }

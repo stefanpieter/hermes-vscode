@@ -26,6 +26,7 @@ export interface WebviewState {
   // Queue
   queueHydrated: boolean;
   pendingQueuedMessages: QueuedWebviewMessage[];
+  editingQueuedRequestId?: string;
   prevQueueCount: number;
 
   // Profiles
