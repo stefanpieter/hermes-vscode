@@ -133,6 +133,7 @@ ${CSS_TEMPLATE}
     <textarea id="input" rows="2" placeholder="Message Hermes…"></textarea>
   </div>
   <div id="queue-status"></div>
+  <div id="queue-items" role="list" aria-label="Queued messages"></div>
   <div id="bottom-bar">
     <button class="cmd-btn" id="attach-btn" title="Attach file"><span class="btn-icon">⊕</span></button>
     <div class="btn-wrap">
@@ -747,6 +748,43 @@ const CSS_TEMPLATE = /* css */ `
       font-family: var(--ui-font); font-size: 0.72em;
       color: var(--gold); opacity: 0.8; padding: 0 8px 2px; display: none;
     }
+    #queue-items {
+      display: none; flex-direction: column; gap: 4px;
+      max-height: 180px; overflow-y: auto; padding: 2px 6px 5px;
+      font-family: var(--ui-font);
+    }
+    .queued-item {
+      display: grid; grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center; gap: 6px; padding: 5px 6px;
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
+    }
+    .queued-item.slash { border-color: var(--gold-border); }
+    .queued-item.editing { display: flex; flex-direction: column; align-items: stretch; }
+    .queued-item-position {
+      color: var(--gold); opacity: 0.8; font-size: 0.72em; text-align: center;
+    }
+    .queued-item-text {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--vscode-foreground); font-size: 0.78em;
+    }
+    .queued-actions { display: flex; gap: 3px; justify-content: flex-end; }
+    .queued-action {
+      border: 1px solid var(--vscode-button-border, var(--vscode-input-border, rgba(128,128,128,0.3)));
+      border-radius: 3px; padding: 2px 6px; cursor: pointer;
+      color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, transparent);
+      font-family: var(--ui-font); font-size: 0.7em;
+    }
+    .queued-action:hover { border-color: var(--gold-border); color: var(--gold); }
+    .queued-action.primary { background: var(--gold); color: #1e1e1e; border-color: var(--gold); }
+    .queued-action.danger:hover { color: var(--vscode-errorForeground, #f48771); border-color: var(--vscode-errorForeground, #f48771); }
+    .queued-edit-input {
+      width: 100%; min-height: 54px; resize: vertical; padding: 5px 6px;
+      border: 1px solid var(--gold-border); border-radius: 3px;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      font-family: inherit; font-size: 0.8em;
+    }
+    .queued-edit-input:focus { outline: 1px solid var(--gold); }
 
     /* ── Bottom toolbar (inside composer, no top border) ── */
     #bottom-bar {

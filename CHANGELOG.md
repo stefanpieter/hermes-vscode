@@ -6,6 +6,17 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.3.0] — 2026-07-24
+
+### Added
+
+- Queued composer messages now appear above the toolbar with inline Edit and Delete controls while another turn is active.
+- Queue controls use stable request IDs and host-authoritative hydration, so duplicate text and recreated webviews cannot mutate the wrong pending message.
+
+### Changed
+
+- Editing a queued prose message preserves the files, skills, and IDE context captured at submission; changing it into a known slash command safely discards context that slash commands do not accept.
+
 ## [3.2.13] — 2026-07-23
 
 ### Fixed

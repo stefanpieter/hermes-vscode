@@ -262,6 +262,15 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     await subject.handleFromWebview({ type: 'send', text: 'Start the long task', requestId: 'active-1' });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(prompts, ['Start the long task']);
+    assert.deepEqual(posted.find(message => message.startedRequestId === 'active-1'), {
+      type: 'busy',
+      active: true,
+      queued: 0,
+      queuedItems: [],
+      startedText: 'Start the long task',
+      startedSlashCommand: false,
+      startedRequestId: 'active-1',
+    }, 'the host must authoritatively confirm even an immediately started composer request');
 
     vscodeWindow.activeTextEditor = {
       document: { uri: { fsPath: '/workspace/first.ts' } },
@@ -308,12 +317,37 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     ]);
     assert.deepEqual(subject.attachedFiles, []);
     assert.deepEqual(subject.selectedSkills, []);
-    assert.deepEqual(posted.at(-1), { type: 'busy', active: true, queued: 2 });
+    assert.deepEqual(posted.at(-1), {
+      type: 'busy',
+      active: true,
+      queued: 2,
+      queuedItems: [
+        { requestId: 'queued-1', text: 'Use the safer approach instead', isSlashCommand: false },
+        { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+      ],
+    });
 
+    const readyMessageStart = posted.length;
     await subject.handleFromWebview({ type: 'ready' });
+    const readyMessages = posted.slice(readyMessageStart);
+    const readyHistoryIndex = readyMessages.findIndex(message => message.type === 'loadHistory');
+    const readyQueueIndex = readyMessages.findIndex(message => message.type === 'queueState');
+    assert.ok(
+      readyHistoryIndex >= 0 && readyQueueIndex > readyHistoryIndex,
+      'history must load before queue hydration enables live start rendering',
+    );
     assert.deepEqual(
       posted.filter(message => message.type === 'queueState').at(-1),
-      { type: 'queueState', active: true, queued: 2, activeSlashCommand: false },
+      {
+        type: 'queueState',
+        active: true,
+        queued: 2,
+        activeSlashCommand: false,
+        queuedItems: [
+          { requestId: 'queued-1', text: 'Use the safer approach instead', isSlashCommand: false },
+          { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+        ],
+      },
       'a recreated webview must inherit the live host queue state',
     );
     assert.deepEqual(
@@ -336,7 +370,26 @@ test('queues a follow-up submitted while busy without cancelling the active prom
       startedText: 'Use the safer approach instead',
       startedSlashCommand: false,
       startedRequestId: 'queued-1',
+      queuedItems: [
+        { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+      ],
     });
+    assert.equal(
+      posted.filter(message => message.startedRequestId === 'queued-1').length,
+      1,
+      'handoff must emit exactly one authoritative start confirmation',
+    );
+    const queuedStartIndex = posted.findIndex(message => message.startedRequestId === 'queued-1');
+    const queuedAnnotationIndex = posted.findIndex((message, index) =>
+      index > queuedStartIndex
+      && message.type === 'statusBar'
+      && typeof message.contextAnnotation === 'string'
+      && message.contextAnnotation.includes('first.md'),
+    );
+    assert.ok(
+      queuedAnnotationIndex > queuedStartIndex,
+      'context annotation must follow the start acknowledgement that renders its user bubble',
+    );
     assert.deepEqual(
       prompts.map(prompt => prompt.includes('Use the safer approach instead')
         ? 'first queued'
@@ -473,9 +526,121 @@ test('queues model changes and keeps local title changes out of ACP while busy',
     await subject.handleFromWebview({ type: 'ready' });
     assert.deepEqual(
       posted.filter(message => message.type === 'queueState').at(-1),
-      { type: 'queueState', active: true, queued: 0, activeSlashCommand: true },
+      { type: 'queueState', active: true, queued: 0, activeSlashCommand: true, queuedItems: [] },
       'a recreated webview must preserve the active slash-response styling',
     );
+    promptResolvers.shift()?.();
+    await new Promise(resolve => setImmediate(resolve));
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('edits and deletes composer-owned queue entries before handoff', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-queue-mutations-'));
+  const prompts: string[] = [];
+  const promptResolvers: Array<() => void> = [];
+  const posted: Array<Record<string, unknown>> = [];
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const session = {
+    cancel: async (): Promise<void> => undefined,
+    ensureSession: async (): Promise<string> => 'acp-session',
+    sendPrompt: async (text: string): Promise<void> => {
+      prompts.push(text);
+      await new Promise<void>(resolve => { promptResolvers.push(resolve); });
+    },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      messageQueue: Array<{
+        text: string;
+        requestId?: string;
+        isSlashCommand: boolean;
+        attachedFiles: Array<{ name: string; path: string }>;
+        selectedSkills: string[];
+        ideContext: string;
+      }>;
+      attachedFiles: Array<{ name: string; path: string }>;
+      selectedSkills: string[];
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = message => { posted.push(message); };
+
+    await subject.handleFromWebview({ type: 'send', text: 'Active task', requestId: 'active' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    vscodeWindow.activeTextEditor = {
+      document: { uri: { fsPath: '/workspace/original.ts' } },
+      selection: { isEmpty: true },
+    };
+    subject.attachedFiles = [{ name: 'context.md', path: '/context/context.md' }];
+    subject.selectedSkills = ['queue-skill'];
+    await subject.handleFromWebview({ type: 'send', text: 'Original queued text', requestId: 'queued-1' });
+    await subject.handleFromWebview({ type: 'send', text: 'Delete this queued text', requestId: 'queued-2' });
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: 'Revised queued text',
+    });
+    assert.equal(subject.messageQueue[0].text, 'Revised queued text');
+    assert.deepEqual(subject.messageQueue[0].attachedFiles, [
+      { name: 'context.md', path: '/context/context.md' },
+    ], 'a prose edit must retain the context captured when it was submitted');
+    assert.deepEqual(subject.messageQueue[0].selectedSkills, ['queue-skill']);
+    assert.equal(subject.messageQueue[0].ideContext, '[Active file: /workspace/original.ts]\n\n');
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: '/queue revised instruction',
+    });
+    assert.equal(subject.messageQueue[0].isSlashCommand, true);
+    assert.deepEqual(subject.messageQueue[0].attachedFiles, []);
+    assert.deepEqual(subject.messageQueue[0].selectedSkills, []);
+    assert.equal(subject.messageQueue[0].ideContext, '');
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: '   ',
+    });
+    assert.equal(subject.messageQueue[0].text, '/queue revised instruction', 'an empty edit must be ignored');
+
+    await subject.handleFromWebview({ type: 'deleteQueuedMessage', requestId: 'queued-2' });
+    assert.deepEqual(subject.messageQueue.map(item => item.requestId), ['queued-1']);
+    assert.deepEqual(posted.filter(message => message.type === 'queueState').at(-1), {
+      type: 'queueState',
+      active: true,
+      queued: 1,
+      activeSlashCommand: false,
+      queuedItems: [
+        { requestId: 'queued-1', text: '/queue revised instruction', isSlashCommand: true },
+      ],
+    });
+
+    promptResolvers.shift()?.();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(prompts, ['Active task', '/queue revised instruction']);
+    assert.ok(posted.some(message =>
+      message.type === 'busy'
+      && message.startedRequestId === 'queued-1'
+      && message.startedText === '/queue revised instruction'
+      && message.startedSlashCommand === true
+    ));
     promptResolvers.shift()?.();
     await new Promise(resolve => setImmediate(resolve));
   } finally {

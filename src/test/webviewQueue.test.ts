@@ -5,6 +5,9 @@ import { isKnownSlashCommand } from '../slashCommands';
 import {
   acknowledgeStartedQueuedMessage,
   createComposerRequestId,
+  deleteQueuedMessage,
+  editQueuedMessage,
+  editableQueuedMessages,
   hydrateWebviewQueueState,
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
@@ -93,9 +96,55 @@ test('host-only command cannot consume identical composer text', () => {
   assert.deepEqual(state.pendingQueuedMessages, []);
 });
 
-test('rapid follow-up is queued before the host busy round-trip', () => {
+test('host-confirmed start wins when an optimistic edit loses the handoff race', () => {
+  const state = {
+    pendingQueuedMessages: [
+      { requestId: 'composer-1', text: '/queue optimistic edit', isSlashCommand: true },
+    ],
+    pendingSlashResponse: false,
+  };
+
+  const started = acknowledgeStartedQueuedMessage(
+    state,
+    'Original prose already shifted by the host',
+    false,
+    'composer-1',
+  );
+
+  assert.deepEqual(started, {
+    requestId: 'composer-1',
+    text: 'Original prose already shifted by the host',
+    isSlashCommand: false,
+    renderUserMessage: true,
+    showWaiting: true,
+  });
+  assert.equal(state.pendingSlashResponse, false);
+  assert.deepEqual(state.pendingQueuedMessages, []);
+});
+
+test('defers a start acknowledgement until recreated webview history is hydrated', () => {
+  const state = {
+    queueHydrated: false,
+    pendingQueuedMessages: [],
+    pendingSlashResponse: false,
+  };
+
+  const started = acknowledgeStartedQueuedMessage(
+    state,
+    'Persisted before the ready handshake',
+    false,
+    'composer-1',
+  );
+
+  assert.equal(started, undefined);
+  assert.equal(state.pendingSlashResponse, false);
+  assert.deepEqual(state.pendingQueuedMessages, []);
+});
+
+test('holds every composer submission pending until the authoritative host confirms its start', () => {
   const state = {
     isBusy: false,
+    pendingSlashResponse: false,
     pendingQueuedMessages: [] as Array<{
       requestId: string;
       text: string;
@@ -103,15 +152,21 @@ test('rapid follow-up is queued before the host busy round-trip', () => {
     }>,
   };
 
-  assert.equal(registerSubmittedWebviewMessage(state, {
+  registerSubmittedWebviewMessage(state, {
     requestId: 'composer-1', text: 'First', isSlashCommand: false,
-  }), false);
+  });
   assert.equal(state.isBusy, true);
+  assert.deepEqual(state.pendingQueuedMessages, [
+    { requestId: 'composer-1', text: 'First', isSlashCommand: false },
+  ]);
+
+  const first = acknowledgeStartedQueuedMessage(state, 'First', false, 'composer-1');
+  assert.equal(first.renderUserMessage, true);
   assert.deepEqual(state.pendingQueuedMessages, []);
 
-  assert.equal(registerSubmittedWebviewMessage(state, {
+  registerSubmittedWebviewMessage(state, {
     requestId: 'composer-2', text: 'Second', isSlashCommand: false,
-  }), true);
+  });
   assert.deepEqual(state.pendingQueuedMessages, [
     { requestId: 'composer-2', text: 'Second', isSlashCommand: false },
   ]);
@@ -144,18 +199,24 @@ test('composer request IDs remain unique across recreated webviews', () => {
   ]);
 });
 
-test('recreated webview hydrates active queue and slash response state', () => {
+test('recreated webview hydrates active queue, editable messages, and slash response state', () => {
   const state = {
     isBusy: false,
     queueHydrated: false,
     prevQueueCount: 0,
     pendingSlashResponse: false,
+    pendingQueuedMessages: [
+      { requestId: 'stale', text: 'Stale webview item', isSlashCommand: false },
+    ],
   };
 
   hydrateWebviewQueueState(state, {
     active: true,
     queued: 2,
     activeSlashCommand: true,
+    queuedItems: [
+      { requestId: 'queued-1', text: 'Editable after recreation', isSlashCommand: false },
+    ],
   });
 
   assert.deepEqual(state, {
@@ -163,5 +224,54 @@ test('recreated webview hydrates active queue and slash response state', () => {
     queueHydrated: true,
     prevQueueCount: 2,
     pendingSlashResponse: true,
+    pendingQueuedMessages: [
+      { requestId: 'queued-1', text: 'Editable after recreation', isSlashCommand: false },
+    ],
   });
+});
+
+test('edits only the queued message with the matching stable request ID', () => {
+  const queued = [
+    { requestId: 'composer-1', text: 'Same text', isSlashCommand: false, context: 'first' },
+    { requestId: 'composer-2', text: 'Same text', isSlashCommand: false, context: 'second' },
+  ];
+
+  const edited = editQueuedMessage(queued, 'composer-2', '/queue verify later', true);
+
+  assert.equal(edited?.context, 'second');
+  assert.deepEqual(queued, [
+    { requestId: 'composer-1', text: 'Same text', isSlashCommand: false, context: 'first' },
+    { requestId: 'composer-2', text: '/queue verify later', isSlashCommand: true, context: 'second' },
+  ]);
+});
+
+test('deletes only the queued message with the matching stable request ID', () => {
+  const queued = [
+    { text: '/model host-only', isSlashCommand: true },
+    { requestId: 'composer-1', text: 'Keep me', isSlashCommand: false },
+    { requestId: 'composer-2', text: 'Delete me', isSlashCommand: false },
+  ];
+
+  const deleted = deleteQueuedMessage(queued, 'composer-2');
+
+  assert.equal(deleted?.text, 'Delete me');
+  assert.deepEqual(queued, [
+    { text: '/model host-only', isSlashCommand: true },
+    { requestId: 'composer-1', text: 'Keep me', isSlashCommand: false },
+  ]);
+});
+
+test('publishes defensive editable summaries without exposing host-only queue items', () => {
+  const queued = [
+    { text: '/model host-only', isSlashCommand: true },
+    { requestId: 'composer-1', text: 'Editable', isSlashCommand: false, secretContext: '/workspace/file.ts' },
+  ];
+
+  const summaries = editableQueuedMessages(queued);
+
+  assert.deepEqual(summaries, [
+    { requestId: 'composer-1', text: 'Editable', isSlashCommand: false },
+  ]);
+  queued[1].text = 'Changed internally';
+  assert.equal(summaries[0].text, 'Editable');
 });
