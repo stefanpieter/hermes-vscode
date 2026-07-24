@@ -153,7 +153,7 @@
     "tsx": "^4.20.6"
   },
   "dependencies": {
-    "dompurify": "^3.3.3",
+    "dompurify": "^3.4.12",
     "marked": "^17.0.5"
   }
 }
