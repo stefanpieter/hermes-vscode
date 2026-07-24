@@ -15,6 +15,7 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Made background-test discovery independent of shell glob expansion so the suite runs consistently on Linux, macOS, and Windows CI; branch pushes now run separately only for `main` to avoid duplicate pull-request jobs.
 - Added a single `npm run verify` release gate and removed generated profile test output after successful runs.
 - Updated DOMPurify and the VSIX packaging toolchain to eliminate known dependency advisories from the locked build.
+- Added an isolated lockfile audit that forces an online query to the official npm registry, ignores external npm offline/omit/production/registry settings, verifies npm's reported dependency population against `package-lock.json`, validates vulnerability-metadata structure and consistency, and fails on advisories at every severity across production, development, optional, and peer dependencies; behavioural tests cover hostile configuration and fail-closed process, output, and cleanup handling.
 - Removed private machine assumptions and stale Hermes Agent links from contributor documentation.
 
 ### Security

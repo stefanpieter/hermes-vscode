@@ -5,6 +5,7 @@ import test from 'node:test';
 
 const manifestPath = resolve(__dirname, '../../package.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+  scripts?: Record<string, string>;
   capabilities?: {
     untrustedWorkspaces?: {
       supported?: boolean | 'limited';
@@ -19,4 +20,8 @@ test('disables Hermes agent activation in untrusted workspaces', () => {
     manifest.capabilities?.untrustedWorkspaces?.description ?? '',
     /launches.*agent.*workspace/i,
   );
+});
+
+test('runs the isolated all-lockfile dependency audit', () => {
+  assert.equal(manifest.scripts?.audit, 'node scripts/audit-all-locked.mjs');
 });

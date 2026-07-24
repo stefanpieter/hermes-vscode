@@ -32,7 +32,7 @@ Verify at minimum:
 
 1. TypeScript compilation and all tests pass.
 2. Production extension and webview bundles build.
-3. The locked dependency audit reports no high/critical finding.
+3. The isolated lockfile audit forces an online query to the official npm registry, ignores external npm offline/omit/production/registry settings, explicitly includes production, development, optional, and peer dependencies, verifies npm's reported dependency total against `package-lock.json`, validates the structure and internal consistency of vulnerability metadata, and reports no vulnerability findings at any severity. Behavioural regressions must cover hostile environment and user/global configuration, incomplete or contradictory inventory, malformed output, vulnerabilities, child-process failure, and temporary-state cleanup.
 4. The VSIX contains only the manifest, bundled runtime, README/licence/changelog, and required assets.
 5. A fresh VS Code profile can install and activate the candidate.
 6. Hermes ACP can initialise, open/resume a session, stream a response, handle permissions, and complete background work.

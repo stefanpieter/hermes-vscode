@@ -44,6 +44,8 @@ code --install-extension hermes-ai-agent-ci.vsix
 
 The generated VSIX retains the original extension identity only for local compatibility testing while handover is pending. Do not publish it, upload it to the Marketplace, or attach it to a public release.
 
+Installing this VSIX replaces any Marketplace build with the same extension ID in that VS Code profile. Because the local version is newer than the current Marketplace release, automatic updates may not restore the Marketplace build. Record the installed version and keep a tested uninstall/reinstall or previous-VSIX rollback path before compatibility testing.
+
 After installing or updating a VSIX, reload the VS Code window when no valuable ACP/background process is running.
 
 ## Configuration
