@@ -2,9 +2,18 @@
 
 ## A note on versioning
 
-The `v1.x` and `v2.x` majors were premature — milestones in the author's head, not real semver breaking changes. From `v3.0.0` onward, proper semver applies.
+The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` onward, releases follow semantic versioning.
 
 ---
+
+## [Unreleased]
+
+### Maintenance
+
+- Added transparent maintained-fork governance, contribution, security, release, and migration policies while the upstream repository and Marketplace handover is discussed.
+- Added cross-platform CI for type checking, secret scanning, regression tests, production builds, dependency security auditing, and deterministic VSIX package inspection without publicly uploading an unauthorised publisher identity.
+- Updated DOMPurify and the VSIX packaging toolchain to eliminate known dependency advisories from the locked build.
+- Removed private machine assumptions and stale Hermes Agent links from contributor documentation.
 
 ## [3.3.0] — 2026-07-24
 
