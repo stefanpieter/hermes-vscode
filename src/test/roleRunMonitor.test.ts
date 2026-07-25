@@ -64,6 +64,21 @@ test('excludes stale, malformed, and unsupported role manifests without guessing
     role_id: '../planner', role: 'Planner', status: 'running', repo_root: workspace,
     started_at: '2026-07-25T22:00:00Z',
   });
+  await writeManifest(root, 'missing-run-id', {
+    run_id: undefined,
+    role_id: 'planner', role: 'Missing Run Identity', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T22:00:00Z',
+  });
+  await writeManifest(root, 'mismatched-run-id', {
+    run_id: 'different-directory',
+    role_id: 'planner', role: 'Mismatched Run Identity', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T22:00:00Z',
+  });
+  await writeManifest(root, 'whitespace-run-id', {
+    run_id: 'whitespace-run-id ',
+    role_id: 'planner', role: 'Noncanonical Run Identity', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T22:00:00Z',
+  });
   await mkdir(path.join(root, 'runs', 'oversized'), { recursive: true });
   await writeFile(path.join(root, 'runs', 'oversized', 'manifest.json'), ' '.repeat(65 * 1024));
   await mkdir(path.join(root, 'runs', 'broken-json'), { recursive: true });

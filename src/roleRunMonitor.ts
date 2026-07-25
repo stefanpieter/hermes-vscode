@@ -55,10 +55,10 @@ function parseManifest(
 
   const role = typeof data.role === 'string' ? data.role.trim() : '';
   const roleId = typeof data.role_id === 'string' ? data.role_id.trim() : '';
-  const runId = typeof data.run_id === 'string' ? data.run_id.trim() : path.basename(manifestDirectory);
+  const runId = typeof data.run_id === 'string' ? data.run_id : '';
   const status = typeof data.status === 'string' ? STATUS_MAP[data.status] : undefined;
   if (!role || role.length > 100 || !ROLE_ID.test(roleId) || !runId || !status) return undefined;
-  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(runId)) return undefined;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(runId) || runId !== path.basename(manifestDirectory)) return undefined;
 
   const context = record(data.context);
   const contextUsed = safeTokenCount(data.context_used ?? context?.used);
