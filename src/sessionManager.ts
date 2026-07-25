@@ -32,6 +32,8 @@ import {
   parseToolCall, parseToolCallUpdate,
   parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta,
 } from './protocol';
+import { parseAgentActivities } from './agentActivity';
+import { parseAvailableCommandsUpdate } from './slashCommands';
 
 export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -53,8 +55,10 @@ export class SessionManager {
   private activePromptTurn: PromptTurn | null = null;
   private nextPromptTurnId = 1;
 
-  /** True while session/load is synchronously replaying persisted history. */
-  private replayActive = false;
+  /** Session/generation currently replaying persisted history during session/load. */
+  private replayBinding: { sessionId: string; generation: number } | undefined;
+  private sessionBinding: Promise<string> | undefined;
+  private bindingGeneration = 0;
 
   /** Preferred ACP edit mode, reapplied whenever a session is created or loaded. */
   private editApprovalMode: EditApprovalModeId;
@@ -130,6 +134,28 @@ export class SessionManager {
       this.log(`[session] reusing ${this.sessionId}`);
       return this.sessionId;
     }
+    if (this.sessionBinding) return this.sessionBinding;
+
+    const generation = this.bindingGeneration;
+    const binding = this.bindSession(cwd, generation);
+    this.sessionBinding = binding;
+    try {
+      return await binding;
+    } finally {
+      if (this.sessionBinding === binding) this.sessionBinding = undefined;
+    }
+  }
+
+  private assertBindingCurrent(generation: number): void {
+    if (generation !== this.bindingGeneration) throw new Error('Session binding superseded by reset');
+  }
+
+  private async bindSession(cwd: string, generation: number): Promise<string> {
+    this.assertBindingCurrent(generation);
+    if (this.sessionId) {
+      this.log(`[session] reusing ${this.sessionId}`);
+      return this.sessionId;
+    }
 
     // Try to resume a stored session first.
     // Critical: we MUST call session/load so the adapter registers our session ID
@@ -139,18 +165,20 @@ export class SessionManager {
       const storedId = this.storedSessionId;
       this.storedSessionId = null;
       let loaded = false;
+      const replayBinding = { sessionId: storedId, generation };
       try {
         this.log(`[session] attempting session/load ${storedId}`);
         // ACP requires history replay notifications before session/load returns.
         // Route those updates to the pending stored session, but keep them out
         // of the post-prompt background-notification path.
         this.sessionId = storedId;
-        this.replayActive = true;
+        this.replayBinding = replayBinding;
         const result = await this.client.call('session/load', {
           sessionId: storedId,
           cwd,
           mcpServers: [],
         });
+        this.assertBindingCurrent(generation);
         // Adapter returns null when session not found — load_session() → None
         if (result !== null && result !== undefined) {
           loaded = true;
@@ -160,13 +188,15 @@ export class SessionManager {
           this.log(`[session] stored session ${storedId} not found on adapter, creating new`);
         }
       } catch (err) {
+        if (generation !== this.bindingGeneration) throw err;
         this.sessionId = null;
         this.log(`[session] session/load failed (${err}), creating new`);
       } finally {
-        this.replayActive = false;
+        if (this.replayBinding === replayBinding) this.replayBinding = undefined;
       }
       if (loaded) {
         await this.applyEditApprovalMode(storedId);
+        this.assertBindingCurrent(generation);
         return storedId;
       }
       // Fall through to session/new
@@ -178,10 +208,12 @@ export class SessionManager {
       cwd,
       mcpServers: [],
     })) as { sessionId: string; models?: { currentModelId?: string } };
+    this.assertBindingCurrent(generation);
 
     this.sessionId = result.sessionId;
     this.log(`[session] created ${this.sessionId}`);
     await this.applyEditApprovalMode(this.sessionId);
+    this.assertBindingCurrent(generation);
 
     // Emit initial model from session/new response
     const model = result.models?.currentModelId;
@@ -269,6 +301,9 @@ export class SessionManager {
 
   reset(): void {
     this.log('[session] reset');
+    this.bindingGeneration += 1;
+    this.sessionBinding = undefined;
+    this.replayBinding = undefined;
     this.sessionId = null;
     this.storedSessionId = null;
     this.accumulated = '';
@@ -290,17 +325,22 @@ export class SessionManager {
     }
 
     const kind = update.sessionUpdate as string;
-    const event: SessionUpdateEvent = { session_id };
+    const event: SessionUpdateEvent = {
+      session_id,
+      replay: this.replayBinding?.sessionId === session_id,
+    };
+    const agentActivities = parseAgentActivities(update);
+    if (agentActivities !== null) event.agentActivities = agentActivities;
 
     switch (kind) {
       case 'agent_message_chunk': {
-        if (this.activePromptTurn?.cancelled) return;
+        if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
         const text = extractTextContent(update);
         if (text === null) return;
         const meta = update['_meta'] as Record<string, unknown> | undefined;
         const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
         const isBackground = hermesMeta?.backgroundNotification === true
-          || (!(this.activePromptTurn?.promptActive ?? false) && !this.replayActive);
+          || (!(this.activePromptTurn?.promptActive ?? false) && this.replayBinding?.sessionId !== session_id);
         event.background = isBackground;
         event.backgroundProcess = parseBackgroundProcessMeta(update);
         if (isBackground) {
@@ -320,7 +360,7 @@ export class SessionManager {
       }
 
       case 'agent_thought_chunk': {
-        if (this.activePromptTurn?.cancelled) return;
+        if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
         const text = extractTextContent(update);
         if (text?.trim()) event.thinkingText = text;
         else return;
@@ -328,7 +368,7 @@ export class SessionManager {
       }
 
       case 'tool_call': {
-        if (this.activePromptTurn?.cancelled) return;
+        if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
         const parsed = parseToolCall(update);
         event.toolTitle = parsed.title;
         event.toolStatus = parsed.status;
@@ -344,7 +384,7 @@ export class SessionManager {
       }
 
       case 'tool_call_update': {
-        if (this.activePromptTurn?.cancelled) return;
+        if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
         const parsed = parseToolCallUpdate(update);
         event.toolCallId = parsed.toolCallId;
         event.toolStatus = parsed.status;
@@ -359,21 +399,29 @@ export class SessionManager {
 
       case 'usage_update': {
         const usage = parseUsageUpdate(update);
-        if (!usage) return;
-        event.contextUsed = usage.contextUsed;
-        event.contextSize = usage.contextSize;
+        if (usage) {
+          event.contextUsed = usage.contextUsed;
+          event.contextSize = usage.contextSize;
+        } else if (!event.agentActivities) return;
         break;
       }
 
       case 'session_info_update': {
         const title = parseSessionInfoUpdate(update);
-        if (!title) return;
-        event.sessionTitle = title;
+        if (title) event.sessionTitle = title;
+        else if (!event.agentActivities) return;
+        break;
+      }
+
+      case 'available_commands_update': {
+        const availableCommands = parseAvailableCommandsUpdate(update);
+        if (availableCommands === null) return;
+        event.availableCommands = availableCommands;
         break;
       }
 
       default:
-        return;
+        if (!event.agentActivities) return;
     }
 
     this.updateHandler(event);

@@ -7,8 +7,11 @@ class FakeClient {
   notificationHandler: ((method: string, params: unknown) => void) | null = null;
   incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   promptResolve: (() => void) | null = null;
+  sessionNewResolve: (() => void) | null = null;
   holdPrompt = false;
+  holdSessionNew = false;
   failSetMode = false;
+  emitBackgroundDuringLoad = false;
   calls: { method: string; params: unknown }[] = [];
   notifications: { method: string; params: unknown }[] = [];
 
@@ -27,9 +30,17 @@ class FakeClient {
     }
     if (method === 'session/load') {
       this.emit('stored-session', 'replayed history');
+      if (this.emitBackgroundDuringLoad) {
+        this.emit('other-session', 'other session completed', true);
+      }
       return {};
     }
-    if (method === 'session/new') return { sessionId: 'active-session' };
+    if (method === 'session/new') {
+      if (this.holdSessionNew) {
+        await new Promise<void>((resolve) => { this.sessionNewResolve = resolve; });
+      }
+      return { sessionId: 'active-session' };
+    }
     if (method === 'session/prompt' && this.holdPrompt) {
       await new Promise<void>((resolve) => { this.promptResolve = resolve; });
     }
@@ -62,6 +73,32 @@ function managerWithEvents(client: FakeClient): { manager: SessionManager; event
   manager.onUpdate((event) => events.push(event));
   return { manager, events };
 }
+
+test('deduplicates concurrent session binding requests', async () => {
+  const client = new FakeClient();
+  client.holdSessionNew = true;
+  const { manager } = managerWithEvents(client);
+
+  const first = manager.ensureSession('/tmp');
+  const second = manager.ensureSession('/tmp');
+  assert.equal(client.calls.filter(call => call.method === 'session/new').length, 1);
+
+  client.sessionNewResolve?.();
+  assert.deepEqual(await Promise.all([first, second]), ['active-session', 'active-session']);
+});
+
+test('reset invalidates an in-flight session binding', async () => {
+  const client = new FakeClient();
+  client.holdSessionNew = true;
+  const { manager } = managerWithEvents(client);
+
+  const binding = manager.ensureSession('/tmp');
+  manager.reset();
+  client.sessionNewResolve?.();
+
+  await assert.rejects(binding, /superseded by reset/);
+  assert.equal(manager.getSessionId(), null);
+});
 
 test('marks agent messages received after prompt completion as background', async () => {
   const client = new FakeClient();
@@ -109,6 +146,16 @@ test('cancel keeps the active turn pending until the ACP prompt terminates', asy
   }]);
   client.emit('active-session', 'late cancelled output');
   assert.equal(events.some(event => event.text === 'late cancelled output'), false);
+  client.emit('other-session', 'other session completed', true);
+  assert.equal(events.some(event => event.text === 'other session completed' && event.background), true);
+  client.emitUpdate('other-session', {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'other-process-tool',
+    status: 'completed',
+    rawOutput: JSON.stringify({ output: 'Background process started', session_id: 'proc_other123' }),
+    _meta: { hermes: { backgroundNotification: true } },
+  });
+  assert.equal(events.some(event => event.backgroundProcess?.id === 'proc_other123'), true);
 
   client.promptResolve?.();
   assert.equal(await outcome, 'Cancelled');
@@ -151,6 +198,21 @@ test('accepts session/load replay without treating it as a background notificati
   assert.equal(sessionId, 'stored-session');
   assert.equal(events.at(-1)?.text, 'replayed history');
   assert.equal(events.at(-1)?.background, false);
+  assert.equal(events.at(-1)?.replay, true);
+});
+
+test('does not misclassify another session background completion as load replay', async () => {
+  const client = new FakeClient();
+  client.emitBackgroundDuringLoad = true;
+  const { manager, events } = managerWithEvents(client);
+  manager.setStoredSessionId('stored-session');
+
+  await manager.ensureSession('/tmp');
+
+  const background = events.find(event => event.session_id === 'other-session');
+  assert.equal(background?.background, true);
+  assert.equal(background?.replay, false);
+  assert.equal(background?.text, 'other session completed');
 });
 
 test('applies the configured edit-approval mode when creating a session', async () => {
@@ -257,4 +319,46 @@ test('allows explicitly tagged completion for an inactive ACP session', async ()
   assert.equal(events.at(-1)?.session_id, 'inactive-session');
   assert.equal(events.at(-1)?.background, true);
   assert.equal(events.at(-1)?.text, 'hidden completion');
+});
+
+test('forwards the adapter advertised slash-command catalog', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'available_commands_update',
+    availableCommands: [
+      { name: 'help', description: 'Current help' },
+      { name: 'doctor', description: 'Run diagnostics', input: { hint: 'scope' } },
+    ],
+  });
+
+  assert.deepEqual(events.at(-1)?.availableCommands, [
+    { name: 'help', description: 'Current help' },
+    { name: 'doctor', description: 'Run diagnostics', inputHint: 'scope' },
+  ]);
+});
+
+test('forwards explicit agent activity carried by Hermes ACP metadata', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'usage_update',
+    used: 12000,
+    size: 100000,
+    _meta: {
+      hermes: {
+        agentActivities: [
+          { id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 9000, contextSize: 100000 },
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(events.at(-1)?.agentActivities, [
+    { id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 9000, contextSize: 100000 },
+  ]);
 });

@@ -6,6 +6,8 @@
 import type { SkillGroup } from './skillCatalog';
 import type { ProfileMenuItem } from './profileUi';
 import type { QueuedWebviewMessage } from './webviewQueue';
+import type { AgentActivity } from './agentActivity';
+import type { AvailableSlashCommand } from './slashCommands';
 
 // ── Session & History ────────────────────────────────
 
@@ -53,6 +55,7 @@ export interface BackgroundProcessState {
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
+  replay?: boolean;
   background?: boolean;
   backgroundProcess?: BackgroundProcessState;
   thinkingText?: string;
@@ -70,6 +73,8 @@ export interface SessionUpdateEvent {
   contextUsed?: number;
   contextSize?: number;
   cachedTokens?: number;
+  availableCommands?: AvailableSlashCommand[];
+  agentActivities?: AgentActivity[];
 }
 
 export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
@@ -79,7 +84,7 @@ export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
 export interface ToWebview {
   type:
     | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
-    | 'error' | 'status' | 'clear' | 'busy' | 'queueState'
+    | 'error' | 'status' | 'notice' | 'clear' | 'busy' | 'queueState'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;
   toolName?: string;
@@ -116,6 +121,8 @@ export interface ToWebview {
   profiles?: string[];
   profileItems?: ProfileMenuItem[];
   restartRequired?: boolean;
+  availableCommands?: AvailableSlashCommand[];
+  agentActivities?: AgentActivity[];
 }
 
 export interface FromWebview {
@@ -124,7 +131,7 @@ export interface FromWebview {
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
     | 'toggleSkill' | 'renameSession' | 'deleteSession'
-    | 'selectProfile' | 'customProfile' | 'restartHermes';
+    | 'selectProfile' | 'customProfile' | 'restartHermes' | 'requestCommands';
   text?: string;
   requestId?: string;
   sessionId?: string;

@@ -214,6 +214,7 @@ test('queues a follow-up submitted while busy without cancelling the active prom
   const session = {
     cancel: async (): Promise<void> => { cancelCalls += 1; },
     ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
     sendPrompt: async (text: string): Promise<void> => {
       prompts.push(text);
       activePromptCalls += 1;
@@ -271,6 +272,12 @@ test('queues a follow-up submitted while busy without cancelling the active prom
       startedSlashCommand: false,
       startedRequestId: 'active-1',
     }, 'the host must authoritatively confirm even an immediately started composer request');
+
+    await subject.handleFromWebview({ type: 'newSession' });
+    assert.deepEqual(posted.at(-1), {
+      type: 'notice',
+      text: 'Stop or finish the active Hermes turn before changing sessions or profiles.',
+    }, 'session lifecycle changes must not rebind while a prompt owns the active session');
 
     vscodeWindow.activeTextEditor = {
       document: { uri: { fsPath: '/workspace/first.ts' } },
@@ -335,6 +342,11 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     assert.ok(
       readyHistoryIndex >= 0 && readyQueueIndex > readyHistoryIndex,
       'history must load before queue hydration enables live start rendering',
+    );
+    assert.equal(
+      readyMessages.at(-1)?.type,
+      'queueState',
+      'runtime hydration must finish before the final ready handshake enables submissions',
     );
     assert.deepEqual(
       posted.filter(message => message.type === 'queueState').at(-1),
@@ -455,6 +467,7 @@ test('queues model changes and keeps local title changes out of ACP while busy',
   const session = {
     cancel: async (): Promise<void> => { cancelCalls += 1; },
     ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
     sendPrompt: async (text: string): Promise<void> => {
       prompts.push(text);
       activePromptCalls += 1;
@@ -552,6 +565,7 @@ test('edits and deletes composer-owned queue entries before handoff', async () =
   const session = {
     cancel: async (): Promise<void> => undefined,
     ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
     sendPrompt: async (text: string): Promise<void> => {
       prompts.push(text);
       await new Promise<void>(resolve => { promptResolvers.push(resolve); });

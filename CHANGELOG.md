@@ -23,6 +23,19 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.4.0] — 2026-07-25
+
+### Added
+
+- Added an agent-activity strip showing the primary Hermes lifecycle and exact context usage, plus repository-scoped standalone role names and statuses from authoritative Hermes role-run manifests.
+- Added optional per-role context display when the role runtime supplies explicit `context_used` and `context_size` values; unavailable metrics remain visibly unknown rather than estimated.
+
+### Changed
+
+- The slash-command menu and command classification now consume Hermes ACP `available_commands_update` metadata, so additions, edits, and removals propagate without maintaining a second UI list.
+- Corrected the compatibility command catalog from obsolete `/compact` to Hermes `/compress`.
+- Active ACP sessions now hydrate on panel readiness so command metadata is current without waiting for the first prompt; replay metadata is accepted without duplicating the locally restored transcript.
+
 ## [3.3.0] — 2026-07-24
 
 ### Added

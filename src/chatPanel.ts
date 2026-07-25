@@ -16,11 +16,15 @@ import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { sendPromptWithSessionBinding } from './promptSessionBinding';
 import { sessionReadyUiMessages, sessionSwitchUiMessages } from './sessionSwitchUi';
-import { isKnownSlashCommand } from './slashCommands';
+import type { SessionContextUsage } from './sessionSwitchUi';
+import { DEFAULT_AVAILABLE_COMMANDS, isKnownSlashCommand } from './slashCommands';
 import { normalizePastedImageExtension } from './pastedImage';
 import { deleteQueuedMessage, editQueuedMessage, editableQueuedMessages } from './webviewQueue';
 import type { ProfileMenuItem } from './profileUi';
 import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
+import type { AgentActivity } from './agentActivity';
+import type { AvailableSlashCommand } from './slashCommands';
+import { defaultRoleRunsRoot, RoleRunMonitor } from './roleRunMonitor';
 
 interface PromptRequest {
   text: string;
@@ -38,6 +42,7 @@ export interface ProfileController {
   selectProfile(profile: string): Promise<boolean>;
   customProfile(): Promise<boolean>;
   restartHermes(): Promise<void>;
+  ensureConnected?(): Promise<void>;
 }
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -50,7 +55,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
   private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
+  private readonly agentActivitiesBySession = new Map<string, AgentActivity[]>();
+  private workspaceRoleActivities: AgentActivity[] = [];
+  private readonly availableCommandsBySession = new Map<string, AvailableSlashCommand[]>();
+  private readonly contextUsageBySession = new Map<string, SessionContextUsage>();
   private readonly backgroundMessages: BackgroundMessageAccumulator;
+  private readonly roleRunMonitor: RoleRunMonitor;
+  private runtimeHydration: Promise<void> | undefined;
+  private lifecycleTransition: Promise<void> | undefined;
 
   private readonly store: SessionStore;
   private readonly modelGroups: ModelMenuGroup[] = loadHermesModelGroups();
@@ -76,6 +88,27 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.backgroundMessages = new BackgroundMessageAccumulator((sessionId, text) => {
       this.flushBackgroundMessage(sessionId, text);
     });
+    this.roleRunMonitor = new RoleRunMonitor(
+      defaultRoleRunsRoot(),
+      () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) return undefined;
+        const sessions = this.store.allSessionsReversed();
+        const sessionCreatedAt = sessions.reduce(
+          (earliest, session) => Math.min(earliest, session.createdAt),
+          Date.now(),
+        );
+        return { scopeId: `workspace:${workspaceRoot}`, workspaceRoot, sessionCreatedAt };
+      },
+      (scope, activities) => {
+        if (!scope.scopeId) return;
+        this.workspaceRoleActivities = activities.map(activity => ({ ...activity }));
+        this.post({
+          type: 'statusBar',
+          agentActivities: this.agentActivitiesFor(this.store.getAcpSessionId()),
+        });
+      },
+    );
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -92,6 +125,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     // Create first session if none exist
     this.store.ensureSession();
+    this.roleRunMonitor.start();
 
     // Restore ACP session ID from persisted state (enables Hermes context resume)
     const active = this.store.active();
@@ -111,6 +145,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     // Route session updates to the webview
     this.session.onUpdate((event) => {
+      if (event.agentActivities !== undefined) {
+        this.agentActivitiesBySession.set(event.session_id, event.agentActivities.map(activity => ({ ...activity })));
+        if (this.isActiveRuntimeSession(event.session_id)) {
+          this.post({ type: 'statusBar', agentActivities: this.agentActivitiesFor(event.session_id) });
+        }
+      }
+      if (event.availableCommands !== undefined) {
+        this.availableCommandsBySession.set(event.session_id, event.availableCommands.map(command => ({ ...command })));
+        if (this.isActiveRuntimeSession(event.session_id)) {
+          this.post({ type: 'statusBar', availableCommands: event.availableCommands });
+        }
+      }
+      if (event.contextUsed !== undefined) {
+        this.contextUsageBySession.set(event.session_id, {
+          contextUsed: event.contextUsed,
+          ...(event.contextSize !== undefined ? { contextSize: event.contextSize } : {}),
+          ...(event.cachedTokens !== undefined ? { cachedTokens: event.cachedTokens } : {}),
+        });
+      }
+      if ((event.model || event.sessionTitle || event.contextUsed !== undefined)
+        && this.isActiveRuntimeSession(event.session_id)) {
+        this.post({
+          type: 'statusBar',
+          model: event.model,
+          sessionTitle: event.sessionTitle,
+          contextUsed: event.contextUsed,
+          contextSize: event.contextSize,
+          cachedTokens: event.cachedTokens,
+        });
+      }
+      // The local session store already hydrated the visible transcript. ACP
+      // replay remains useful for metadata discovery, but rendering it again
+      // would duplicate messages and resurrect historical process state.
+      if (event.replay) return;
       if (event.backgroundProcess) this.updateBackgroundProcess(event.session_id, event.backgroundProcess);
       if (event.background) {
         // ACP can deliver a delayed response as many token-sized chunks after
@@ -190,17 +258,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.lastTurnTools = [];
         this.post({ type: 'error', text: event.error });
       }
-      // Status bar live data
-      if (event.model || event.sessionTitle || event.contextUsed !== undefined) {
-        this.post({
-          type: 'statusBar',
-          model: event.model,
-          sessionTitle: event.sessionTitle,
-          contextUsed: event.contextUsed,
-          contextSize: event.contextSize,
-          cachedTokens: event.cachedTokens,
-        });
-      }
     });
 
     // Load the document only after its message and session-update handlers exist.
@@ -209,6 +266,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   post(msg: ToWebview): void {
     this.view?.webview.postMessage(msg);
+  }
+
+  async requestNewSession(): Promise<void> {
+    await this.handleFromWebview({ type: 'newSession' });
+  }
+
+  async requestHermesRestart(): Promise<boolean> {
+    await this.handleFromWebview({ type: 'restartHermes' });
+    return !this.busy;
+  }
+
+  async requestProfileSelection(profile: string): Promise<void> {
+    await this.handleFromWebview({ type: 'selectProfile', text: profile });
   }
 
   private postQueueState(): void {
@@ -221,7 +291,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     });
   }
 
-  private emitInitialState(): void {
+  private emitInitialState(deferQueueState = false): void {
     const active = this.store.active();
     this.post({
       type: 'statusBar',
@@ -231,20 +301,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     });
     for (const update of sessionReadyUiMessages(
       this.backgroundProcessesFor(active?.acpSessionId),
+      this.agentActivitiesFor(active?.acpSessionId, active?.id),
+      this.availableCommandsFor(active?.acpSessionId),
+      this.contextUsageFor(active?.acpSessionId),
     )) this.post(update);
     this.broadcastProfileState();
     this.broadcastSessions(this.store);
     if (active && active.messages.length > 0) {
       this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
     }
-    // queueState is the final ready-handshake message: history is now rendered,
-    // so live start events can safely append without duplicating persisted input.
-    this.postQueueState();
+    // queueState is the final ready-handshake message: history and runtime
+    // metadata are hydrated before composer submissions can race session binding.
+    if (!deferQueueState) this.postQueueState();
+  }
+
+  private hydrateActiveRuntimeSession(): Promise<void> {
+    if (this.runtimeHydration) return this.runtimeHydration;
+    const hydration = this.performRuntimeHydration();
+    this.runtimeHydration = hydration;
+    return hydration.finally(() => {
+      if (this.runtimeHydration === hydration) this.runtimeHydration = undefined;
+    });
+  }
+
+  private async performRuntimeHydration(): Promise<void> {
+    const active = this.store.active();
+    if (!active) return;
+    const localSessionId = active.id;
+
+    try {
+      await this.profileController?.ensureConnected?.();
+      const acpSessionId = await this.session.ensureSession(this.resolveWorkingDirectory());
+      if (this.store.activeId !== localSessionId) return;
+      this.store.setAcpSessionId(acpSessionId);
+      this.post({
+        type: 'statusBar',
+        availableCommands: this.availableCommandsFor(acpSessionId),
+        agentActivities: this.agentActivitiesFor(acpSessionId, localSessionId),
+        ...this.contextUsageFor(acpSessionId),
+      });
+    } catch (err) {
+      this.log(`[session] metadata hydration failed: ${String(err)}`);
+    }
   }
 
   dispose(): void {
     this.view = undefined;
     this.backgroundMessages.dispose();
+    this.roleRunMonitor.dispose();
   }
 
   private flushBackgroundMessage(acpSessionId: string, text: string): void {
@@ -286,6 +390,34 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     return processes ? [...processes.values()] : [];
   }
 
+  private agentActivitiesFor(acpSessionId?: string, _localSessionId = this.store.activeId): AgentActivity[] {
+    const transport = acpSessionId ? this.agentActivitiesBySession.get(acpSessionId) : undefined;
+    const combined = new Map<string, AgentActivity>();
+    for (const activity of [...(transport ?? []), ...this.workspaceRoleActivities]) {
+      combined.set(activity.id, { ...activity });
+    }
+    return [...combined.values()];
+  }
+
+  private availableCommandsFor(acpSessionId?: string): AvailableSlashCommand[] {
+    const commands = acpSessionId ? this.availableCommandsBySession.get(acpSessionId) : undefined;
+    return (commands ?? DEFAULT_AVAILABLE_COMMANDS).map(command => ({ ...command }));
+  }
+
+  private currentAvailableCommands(): AvailableSlashCommand[] {
+    const acpSessionId = this.session.getSessionId() ?? this.store.getAcpSessionId();
+    return this.availableCommandsFor(acpSessionId ?? undefined);
+  }
+
+  private contextUsageFor(acpSessionId?: string): SessionContextUsage | undefined {
+    const usage = acpSessionId ? this.contextUsageBySession.get(acpSessionId) : undefined;
+    return usage ? { ...usage } : undefined;
+  }
+
+  private isActiveRuntimeSession(acpSessionId: string): boolean {
+    return this.session.getSessionId() === acpSessionId || this.store.getAcpSessionId() === acpSessionId;
+  }
+
   private saveTurnToSession(): void {
     this.store.addTurnMessages(this.lastTurnTools, this.lastTurnText);
     this.lastTurnText = '';
@@ -305,8 +437,47 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   private async handleFromWebview(msg: FromWebview): Promise<void> {
+    const changesRuntime = msg.type === 'ready'
+      || msg.type === 'newSession'
+      || msg.type === 'switchSession'
+      || msg.type === 'deleteSession'
+      || msg.type === 'selectProfile'
+      || msg.type === 'customProfile'
+      || msg.type === 'restartHermes';
+
+    if (changesRuntime) {
+      const previous = this.lifecycleTransition ?? Promise.resolve();
+      const transition = previous.catch(() => {}).then(() => this.handleFromWebviewUnlocked(msg));
+      this.lifecycleTransition = transition;
+      try {
+        await transition;
+      } finally {
+        if (this.lifecycleTransition === transition) this.lifecycleTransition = undefined;
+      }
+      return;
+    }
+
+    if (this.lifecycleTransition) await this.lifecycleTransition;
+    await this.handleFromWebviewUnlocked(msg);
+  }
+
+  private async handleFromWebviewUnlocked(msg: FromWebview): Promise<void> {
+    const changesRuntime = msg.type === 'newSession'
+      || msg.type === 'switchSession'
+      || msg.type === 'deleteSession'
+      || msg.type === 'selectProfile'
+      || msg.type === 'customProfile'
+      || msg.type === 'restartHermes';
+    if (this.busy && changesRuntime) {
+      this.log(`[ui] blocked ${msg.type} while a prompt is active`);
+      this.post({ type: 'notice', text: 'Stop or finish the active Hermes turn before changing sessions or profiles.' });
+      return;
+    }
+
     if (msg.type === 'ready') {
-      this.emitInitialState();
+      this.emitInitialState(true);
+      await this.hydrateActiveRuntimeSession();
+      this.postQueueState();
 
     } else if (msg.type === 'send' && msg.text) {
       this.log(`[ui] send (${msg.text.length} chars)`);
@@ -320,7 +491,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           this.messageQueue,
           msg.requestId,
           text,
-          isKnownSlashCommand(text),
+          isKnownSlashCommand(text, this.currentAvailableCommands()),
         );
         if (queued?.isSlashCommand) {
           queued.attachedFiles = [];
@@ -354,8 +525,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.session.reset();
       this.store.createSession('new session');
       this.post({ type: 'clear' });
-      this.showBackgroundProcesses();
+      this.post({
+        type: 'statusBar',
+        backgroundProcesses: [],
+        agentActivities: [],
+        availableCommands: this.currentAvailableCommands(),
+      });
       this.broadcastSessions(this.store);
+      await this.roleRunMonitor.refresh();
+      await this.hydrateActiveRuntimeSession();
 
     } else if (msg.type === 'switchSession' && msg.sessionId) {
       this.log(`[ui] switch session ${msg.sessionId}`);
@@ -374,12 +552,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       for (const update of sessionSwitchUiMessages(
         target.title,
         this.backgroundProcessesFor(target.acpSessionId),
+        this.agentActivitiesFor(target.acpSessionId, target.id),
+        this.availableCommandsFor(target.acpSessionId),
+        this.contextUsageFor(target.acpSessionId),
       )) this.post(update);
       this.broadcastSessions(this.store);
 
       if (target.messages.length > 0) {
         this.post({ type: 'loadHistory', history: target.messages, activeSessionId: target.id });
       }
+      await this.roleRunMonitor.refresh();
+      await this.hydrateActiveRuntimeSession();
 
     } else if (msg.type === 'attachFile') {
       // Open file picker and send selected file info back to webview
@@ -448,19 +631,26 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       const nextProfile = msg.text ?? '';
       this.log(`[ui] select profile ${profileDisplayName(nextProfile)}`);
       const restarted = await this.profileController?.selectProfile(nextProfile);
-      if (restarted) this.post({ type: 'clear' });
+      if (restarted) {
+        this.post({ type: 'clear' });
+        await this.hydrateActiveRuntimeSession();
+      }
       this.broadcastProfileState();
 
     } else if (msg.type === 'customProfile') {
       this.log('[ui] custom profile');
       const restarted = await this.profileController?.customProfile();
-      if (restarted) this.post({ type: 'clear' });
+      if (restarted) {
+        this.post({ type: 'clear' });
+        await this.hydrateActiveRuntimeSession();
+      }
       this.broadcastProfileState();
 
     } else if (msg.type === 'restartHermes') {
       this.log('[ui] restart Hermes for profile change');
       await this.profileController?.restartHermes();
       this.post({ type: 'clear' });
+      await this.hydrateActiveRuntimeSession();
       this.broadcastProfileState();
 
     } else if (msg.type === 'toggleSkill' && msg.text) {
@@ -486,7 +676,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   /** Snapshot composer-owned context so later input cannot mutate a queued turn. */
   private capturePromptRequest(text: string, requestId?: string): PromptRequest {
-    const isSlashCommand = isKnownSlashCommand(text);
+    const isSlashCommand = isKnownSlashCommand(text, this.currentAvailableCommands());
     const request: PromptRequest = {
       text,
       ...(requestId ? { requestId } : {}),
@@ -513,7 +703,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private createCommandRequest(text: string): PromptRequest {
     return {
       text,
-      isSlashCommand: isKnownSlashCommand(text),
+      isSlashCommand: isKnownSlashCommand(text, this.currentAvailableCommands()),
       attachedFiles: [],
       selectedSkills: [],
       ideContext: '',

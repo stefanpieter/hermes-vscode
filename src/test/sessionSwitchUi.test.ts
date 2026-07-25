@@ -29,3 +29,29 @@ test('restores active-session background status when the webview becomes ready a
     },
   ]);
 });
+
+test('rehydrates authoritative agent activity, commands, and primary context with a session', () => {
+  const messages = sessionSwitchUiMessages(
+    'Role workflow',
+    [],
+    [{ id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 8000, contextSize: 100000 }],
+    [{ name: 'doctor', description: 'Run diagnostics' }],
+    { contextUsed: 12000, contextSize: 200000, cachedTokens: 3000 },
+  );
+
+  assert.deepEqual(messages, [
+    { type: 'clear' },
+    {
+      type: 'statusBar',
+      sessionTitle: 'Role workflow',
+      backgroundProcesses: [],
+      agentActivities: [
+        { id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 8000, contextSize: 100000 },
+      ],
+      availableCommands: [{ name: 'doctor', description: 'Run diagnostics' }],
+      contextUsed: 12000,
+      contextSize: 200000,
+      cachedTokens: 3000,
+    },
+  ]);
+});

@@ -403,6 +403,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         session.reset();
         await ensureConnected();
       },
+      ensureConnected,
     },
   );
 
@@ -423,17 +424,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('hermes.restartAgent', async () => {
       outputChannel.appendLine('[hermes] restarting ACP from command palette');
-      if (client?.running) client.stop();
-      session.reset();
-      panel.post({ type: 'clear' });
-      await ensureConnected();
-      vscode.window.showInformationMessage('Hermes Agent restarted.');
+      if (await panel.requestHermesRestart()) {
+        vscode.window.showInformationMessage('Hermes Agent restarted.');
+      }
     }),
 
-    vscode.commands.registerCommand('hermes.newSession', () => {
+    vscode.commands.registerCommand('hermes.newSession', async () => {
       outputChannel.appendLine('[ui] new session');
-      session.reset();
-      panel.post({ type: 'clear' });
+      await panel.requestNewSession();
     }),
 
     vscode.commands.registerCommand('hermes.selectProfile', async () => {
@@ -460,10 +458,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       nextProfile = normalizeHermesProfile(nextProfile);
-      const result = await applySelectedProfile(nextProfile, 'command palette');
-      if (!result.changed) return;
-      if (result.restarted) panel.post({ type: 'clear' });
-      panel.refreshProfileState();
+      await panel.requestProfileSelection(nextProfile);
     }),
 
     vscode.commands.registerCommand('hermes.selectEditApprovalMode', async () => {

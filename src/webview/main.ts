@@ -16,6 +16,7 @@ import {
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
 import { isKnownSlashCommand } from '../slashCommands';
+import { primaryAgentActivity } from '../agentActivity';
 import { renderQueuedMessagesMarkup } from './queueControls';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
@@ -26,6 +27,7 @@ import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
   buildProfileMenu, setupProfileHandlers,
   buildSkillsMenu, setupSkillsHandlers, updateStatusBar,
+  buildSlashCommandMenu, renderAgentActivityBar,
 } from './menus';
 
 declare function acquireVsCodeApi(): { postMessage(msg: FromWebview): void };
@@ -72,6 +74,7 @@ const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElemen
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
+const agentActivityBar = document.getElementById('agent-activity-bar') as HTMLDivElement;
 
 // The host owns the live queue across webview disposal. Keep submission controls
 // unavailable until the ready handshake restores that runtime state.
@@ -83,9 +86,18 @@ const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profil
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
+function renderAgentBar(): void {
+  renderAgentActivityBar(
+    agentActivityBar,
+    primaryAgentActivity(S.isBusy, S.currentContextUsed, S.knownContextSize || undefined),
+    S.agentActivities,
+  );
+}
+
 // ── Helpers ──────────────────────────────────────────
 function setBusy(active: boolean, queued = 0): void {
   S.isBusy = active;
+  renderAgentBar();
   logoMark.classList.toggle('busy', active);
   composer.classList.toggle('busy-glow', active);
   sendBtn.style.display = active ? 'none' : 'block';
@@ -170,7 +182,7 @@ function send(): void {
   const text = inputEl.value.trim();
   if (!text) return;
   const requestId = createComposerRequestId(() => crypto.randomUUID());
-  const isSlash = isKnownSlashCommand(text);
+  const isSlash = isKnownSlashCommand(text, S.availableCommands);
   registerSubmittedWebviewMessage(S, { requestId, text, isSlashCommand: isSlash });
   inputEl.value = '';
   inputEl.style.height = '';
@@ -262,7 +274,10 @@ overflowBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   const open = overflowMenu.style.display !== 'none';
   closeFn(); hideCmdArg();
-  if (!open) overflowMenu.style.display = 'block';
+  if (!open) {
+    buildSlashCommandMenu(overflowMenu, S.availableCommands);
+    overflowMenu.style.display = 'block';
+  }
 });
 
 overflowMenu.addEventListener('click', (e) => {
@@ -411,7 +426,7 @@ queueItems.addEventListener('click', (e) => {
       editor?.focus();
       return;
     }
-    editQueuedMessage(S.pendingQueuedMessages, requestId, text, isKnownSlashCommand(text));
+    editQueuedMessage(S.pendingQueuedMessages, requestId, text, isKnownSlashCommand(text, S.availableCommands));
     S.editingQueuedRequestId = undefined;
     renderQueuedMessages();
     vscode.postMessage({ type: 'editQueuedMessage', requestId, text });
@@ -576,19 +591,37 @@ window.addEventListener('message', (e: MessageEvent) => {
       }
       break;
 
+    case 'notice': {
+      const notice = appendDiv(messagesEl, 'status-line');
+      notice.textContent = msg.text ?? '';
+      autoScroll();
+      break;
+    }
+
     case 'clear':
       messagesEl.innerHTML = '';
       S.pendingQueuedMessages = []; S.prevQueueCount = 0; S.knownContextSize = 0; S.flushScheduled = false;
+      S.currentContextUsed = undefined; S.agentActivities = []; S.availableCommands = [];
       S.editingQueuedRequestId = undefined;
       ctxBarWrap.style.display = 'none';
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       setBusy(false);
       statusContextEl.textContent = ''; statusContextEl.className = '';
       backgroundProcessStatus.className = ''; backgroundProcessStatus.innerHTML = '';
+      buildSlashCommandMenu(overflowMenu, S.availableCommands);
+      renderAgentBar();
       break;
 
     case 'statusBar': {
       updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
+      if (msg.availableCommands !== undefined) {
+        S.availableCommands = msg.availableCommands.map(command => ({ ...command }));
+        buildSlashCommandMenu(overflowMenu, S.availableCommands);
+      }
+      if (msg.agentActivities !== undefined) {
+        S.agentActivities = msg.agentActivities.map(activity => ({ ...activity }));
+      }
+      renderAgentBar();
       if (msg.skillGroups && msg.skillGroups.length > 0) S.skillGroupsData = msg.skillGroups;
       if (msg.selectedSkills !== undefined) {
         S.selectedSkillNames = new Set(msg.selectedSkills);
