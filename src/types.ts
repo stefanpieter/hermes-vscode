@@ -52,12 +52,20 @@ export interface BackgroundProcessState {
   exitCode?: number;
 }
 
+export interface AutonomousTurnState {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  trigger: 'background_notification';
+}
+
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
   replay?: boolean;
   background?: boolean;
   backgroundProcess?: BackgroundProcessState;
+  autonomousTurn?: AutonomousTurnState;
+  autonomousTurnId?: string;
   thinkingText?: string;
   toolTitle?: string;
   toolStatus?: string;

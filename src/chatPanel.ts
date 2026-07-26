@@ -21,7 +21,7 @@ import { DEFAULT_AVAILABLE_COMMANDS, isKnownSlashCommand } from './slashCommands
 import { normalizePastedImageExtension } from './pastedImage';
 import { deleteQueuedMessage, editQueuedMessage, editableQueuedMessages } from './webviewQueue';
 import type { ProfileMenuItem } from './profileUi';
-import type { AttachedFile, BackgroundProcessState, StoredMessage, ToWebview, FromWebview } from './types';
+import type { AttachedFile, BackgroundProcessState, SessionUpdateEvent, StoredMessage, ToWebview, FromWebview } from './types';
 import type { AgentActivity } from './agentActivity';
 import type { AvailableSlashCommand } from './slashCommands';
 import { defaultRoleRunsRoot, RoleRunMonitor } from './roleRunMonitor';
@@ -51,6 +51,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private view?: vscode.WebviewView;
   private busy = false;
   private activeRequest?: PromptRequest;
+  private autonomousTurnId?: string;
+  private readonly autonomousTurnsBySession = new Map<string, { id: string; text: string; tools: StoredMessage[] }>();
   private messageQueue: PromptRequest[] = [];
   private lastTurnText = '';
   private lastTurnTools: StoredMessage[] = [];
@@ -179,7 +181,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       // replay remains useful for metadata discovery, but rendering it again
       // would duplicate messages and resurrect historical process state.
       if (event.replay) return;
+      if (event.autonomousTurn) {
+        this.handleAutonomousTurn(event);
+        if (!event.text && !event.thinkingText && event.toolTitle === undefined) return;
+      }
       if (event.backgroundProcess) this.updateBackgroundProcess(event.session_id, event.backgroundProcess);
+      if (this.captureAutonomousEvent(event)) return;
       if (event.background) {
         // ACP can deliver a delayed response as many token-sized chunks after
         // session/prompt has returned. Coalesce by owning session before one
@@ -520,6 +527,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     } else if (msg.type === 'newSession') {
       this.log('[ui] new session');
       this.messageQueue = [];
+      this.autonomousTurnId = undefined;
       this.lastTurnText = '';
       this.lastTurnTools = [];
       this.session.reset();
@@ -541,6 +549,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (!target) return;
 
       this.messageQueue = [];
+      this.autonomousTurnId = undefined;
       this.lastTurnText = '';
       this.lastTurnTools = [];
       this.session.reset();
@@ -726,6 +735,90 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     void this.runPrompt(request);
   }
 
+  /** Apply lifecycle sent by a server-initiated Lead continuation turn. */
+  private handleAutonomousTurn(event: SessionUpdateEvent): void {
+    const turn = event.autonomousTurn;
+    if (!turn) return;
+    if (turn.status === 'running') {
+      this.autonomousTurnsBySession.set(event.session_id, { id: turn.id, text: '', tools: [] });
+      if (!this.isActiveRuntimeSession(event.session_id)) return;
+      // Persist/render the completion trigger before any model response. The
+      // normal background accumulator deliberately waits for token chunks.
+      this.backgroundMessages.flushSession(event.session_id);
+      this.autonomousTurnId = turn.id;
+      this.busy = true;
+      this.post({
+        type: 'busy',
+        active: true,
+        queued: this.messageQueue.length,
+        queuedItems: editableQueuedMessages(this.messageQueue),
+      });
+      return;
+    }
+    const buffered = this.autonomousTurnsBySession.get(event.session_id);
+    if (!buffered || buffered.id !== turn.id) return;
+    this.autonomousTurnsBySession.delete(event.session_id);
+    if (!this.isActiveRuntimeSession(event.session_id) || this.autonomousTurnId !== turn.id) {
+      this.store.addTurnMessagesByAcpSessionId(event.session_id, buffered.tools, buffered.text);
+      this.broadcastSessions(this.store);
+      return;
+    }
+    this.autonomousTurnId = undefined;
+    this.saveTurnToSession();
+    this.post({ type: 'done' });
+    if (turn.status === 'failed') {
+      this.post({ type: 'notice', text: 'Autonomous continuation stopped unexpectedly.' });
+    }
+    this.advancePromptQueueOrIdle();
+  }
+
+  private advancePromptQueueOrIdle(): void {
+    if (this.autonomousTurnId) {
+      this.busy = true;
+      this.activeRequest = undefined;
+      this.post({
+        type: 'busy',
+        active: true,
+        queued: this.messageQueue.length,
+        queuedItems: editableQueuedMessages(this.messageQueue),
+      });
+    } else if (this.messageQueue.length > 0) {
+      const next = this.messageQueue.shift()!;
+      this.busy = true;
+      void this.runPrompt(next);
+    } else {
+      this.busy = false;
+      this.activeRequest = undefined;
+      this.post({ type: 'busy', active: false, queued: 0, queuedItems: [] });
+    }
+  }
+
+  private captureAutonomousEvent(event: SessionUpdateEvent): boolean {
+    const turnId = event.autonomousTurnId;
+    if (!turnId) return false;
+    const buffered = this.autonomousTurnsBySession.get(event.session_id);
+    if (!buffered || buffered.id !== turnId) return false;
+    if (this.isActiveRuntimeSession(event.session_id) && this.autonomousTurnId === turnId) return false;
+
+    let captured = false;
+    if (event.text) {
+      buffered.text += event.text;
+      captured = true;
+    }
+    if (event.toolTitle !== undefined) {
+      captured = true;
+      if (event.toolTitle) {
+        const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : event.toolStatus === 'error' ? '✗' : '⋯';
+        buffered.tools.push({
+          role: 'tool',
+          text: `${icon} ${event.toolTitle}${event.toolDetail ? ': ' + event.toolDetail : ''}`,
+        });
+      }
+    }
+    if (event.thinkingText || event.todoState || event.done || event.error) captured = true;
+    return captured;
+  }
+
   private async runPrompt(request: PromptRequest): Promise<void> {
     const { text } = request;
     this.log(`[ui] run prompt (${text.length} chars)`);
@@ -805,15 +898,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       }
     } finally {
       this.log('[ui] prompt finished');
-      if (this.messageQueue.length > 0) {
-        const next = this.messageQueue.shift()!;
-        this.busy = true;
-        void this.runPrompt(next);
-      } else {
-        this.busy = false;
-        this.activeRequest = undefined;
-        this.post({ type: 'busy', active: false, queued: 0, queuedItems: [] });
-      }
+      this.advancePromptQueueOrIdle();
     }
   }
 

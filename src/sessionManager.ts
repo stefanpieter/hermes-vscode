@@ -30,7 +30,7 @@ import type { SessionUpdateEvent, SessionUpdateHandler } from './types';
 import {
   extractTextContent, deduplicateChunk,
   parseToolCall, parseToolCallUpdate,
-  parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta,
+  parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta, parseAutonomousTurnMeta,
 } from './protocol';
 import { parseAgentActivities } from './agentActivity';
 import { parseAvailableCommandsUpdate } from './slashCommands';
@@ -48,11 +48,12 @@ export class SessionManager {
   private sessionId: string | null = null;
   private updateHandler: SessionUpdateHandler | null = null;
 
-  /** Accumulated streaming text for the current turn (used for dedup). */
-  private accumulated = '';
+  /** Accumulated streaming text per ACP session (used for resend dedup). */
+  private readonly accumulatedBySession = new Map<string, string>();
 
   /** Cancellation ownership for the one active turn, including session binding. */
   private activePromptTurn: PromptTurn | null = null;
+  private readonly autonomousTurnsBySession = new Map<string, string>();
   private nextPromptTurnId = 1;
 
   /** Session/generation currently replaying persisted history during session/load. */
@@ -237,11 +238,11 @@ export class SessionManager {
       promptActive: false,
     };
     this.activePromptTurn = turn;
-    this.accumulated = '';
 
     try {
       const sessionId = await this.ensureSession(cwd);
       turn.sessionId = sessionId;
+      this.accumulatedBySession.set(sessionId, '');
       onSessionBound?.(sessionId);
       if (turn.cancelled) throw new Error('Cancelled');
       this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
@@ -280,6 +281,7 @@ export class SessionManager {
       this.log(`[session] prompt done ${sessionId}${contextUsed ? ` used=${contextUsed}` : ''}${cachedTokens ? ` cached=${cachedTokens}` : ''}${contextSize ? ` size=${contextSize}` : ''}`);
       this.updateHandler?.({ session_id: sessionId, done: true, contextUsed, contextSize, cachedTokens });
     } finally {
+      if (turn.sessionId) this.accumulatedBySession.delete(turn.sessionId);
       if (this.activePromptTurn === turn) this.activePromptTurn = null;
     }
   }
@@ -287,6 +289,11 @@ export class SessionManager {
   async cancel(): Promise<void> {
     const turn = this.activePromptTurn;
     if (!turn) {
+      if (this.sessionId && this.autonomousTurnsBySession.has(this.sessionId)) {
+        this.log(`[session] cancel autonomous turn ${this.autonomousTurnsBySession.get(this.sessionId)}`);
+        this.client.notify('session/cancel', { sessionId: this.sessionId });
+        return;
+      }
       this.log('[session] cancel requested with no active turn');
       return;
     }
@@ -306,7 +313,8 @@ export class SessionManager {
     this.replayBinding = undefined;
     this.sessionId = null;
     this.storedSessionId = null;
-    this.accumulated = '';
+    this.accumulatedBySession.clear();
+    this.autonomousTurnsBySession.clear();
   }
 
   private handleUpdate(params: Record<string, unknown>): void {
@@ -315,10 +323,11 @@ export class SessionManager {
     const session_id = params.sessionId as string;
     const update = params.update as Record<string, unknown> | undefined;
     if (!session_id || !update) return;
+    const trackedAutonomousTurnId = this.autonomousTurnsBySession.get(session_id);
     if (session_id !== this.sessionId) {
       const meta = update['_meta'] as Record<string, unknown> | undefined;
       const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
-      if (hermesMeta?.backgroundNotification !== true) {
+      if (hermesMeta?.backgroundNotification !== true && !trackedAutonomousTurnId) {
         this.log(`[session] ignored update for inactive session ${session_id}`);
         return;
       }
@@ -331,6 +340,16 @@ export class SessionManager {
     };
     const agentActivities = parseAgentActivities(update);
     if (agentActivities !== null) event.agentActivities = agentActivities;
+    const autonomousTurn = parseAutonomousTurnMeta(update);
+    if (autonomousTurn) {
+      event.autonomousTurn = autonomousTurn;
+      if (autonomousTurn.status === 'running') {
+        this.autonomousTurnsBySession.set(session_id, autonomousTurn.id);
+        this.accumulatedBySession.set(session_id, '');
+      }
+    }
+    const autonomousTurnId = autonomousTurn?.id ?? this.autonomousTurnsBySession.get(session_id);
+    if (autonomousTurnId) event.autonomousTurnId = autonomousTurnId;
 
     switch (kind) {
       case 'agent_message_chunk': {
@@ -339,22 +358,28 @@ export class SessionManager {
         if (text === null) return;
         const meta = update['_meta'] as Record<string, unknown> | undefined;
         const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
-        const isBackground = hermesMeta?.backgroundNotification === true
-          || (!(this.activePromptTurn?.promptActive ?? false) && this.replayBinding?.sessionId !== session_id);
+        const isAutonomous = autonomousTurnId !== undefined;
+        const isLifecycle = autonomousTurn !== undefined;
+        const isBackground = (hermesMeta?.backgroundNotification === true && !isLifecycle)
+          || (!(this.activePromptTurn?.promptActive ?? false)
+            && !isAutonomous
+            && this.replayBinding?.sessionId !== session_id);
         event.background = isBackground;
         event.backgroundProcess = parseBackgroundProcessMeta(update);
+        if (isLifecycle && text === '') break;
         if (isBackground) {
           event.text = text;
           break;
         }
-        const result = deduplicateChunk(text, this.accumulated);
+        const accumulated = this.accumulatedBySession.get(session_id) ?? '';
+        const result = deduplicateChunk(text, accumulated);
         if (result.action === 'drop') {
-          if (this.accumulated.endsWith(text)) {
+          if (accumulated.endsWith(text)) {
             this.log(`[session] dedup: dropped partial resend (${text.length} chars)`);
           }
           return;
         }
-        this.accumulated = result.newAccumulated;
+        this.accumulatedBySession.set(session_id, result.newAccumulated);
         event.text = result.text;
         break;
       }
@@ -421,7 +446,12 @@ export class SessionManager {
       }
 
       default:
-        if (!event.agentActivities) return;
+        if (!event.agentActivities && !event.autonomousTurn) return;
+    }
+
+    if (autonomousTurn && autonomousTurn.status !== 'running') {
+      this.autonomousTurnsBySession.delete(session_id);
+      this.accumulatedBySession.delete(session_id);
     }
 
     this.updateHandler(event);

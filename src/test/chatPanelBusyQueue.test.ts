@@ -661,3 +661,161 @@ test('edits and deletes composer-owned queue entries before handoff', async () =
     rmSync(storageRoot, { recursive: true, force: true });
   }
 });
+
+test('keeps the composer busy and persists one continuous autonomous Lead turn', () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-autonomous-turn-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const posted: Array<Record<string, unknown>> = [];
+  const session = { getSessionId: (): string => 'acp-session' };
+
+  try {
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      busy: boolean;
+      autonomousTurnId?: string;
+      lastTurnText: string;
+      backgroundMessages: { push(sessionId: string, text: string, id: string): void };
+      store: {
+        ensureSession(): void;
+        setAcpSessionId(id: string): void;
+        active(): { messages: Array<{ role: string; text: string }> } | undefined;
+      };
+      post(message: Record<string, unknown>): void;
+      handleAutonomousTurn(event: Record<string, unknown>): void;
+    };
+    subject.store.ensureSession();
+    subject.store.setAcpSessionId('acp-session');
+    subject.post = message => { posted.push(message); };
+    subject.handleAutonomousTurn({
+      session_id: 'other-session',
+      autonomousTurn: { id: 'proc_other', status: 'running', trigger: 'background_notification' },
+    });
+    assert.equal(subject.busy, false, 'inactive ACP sessions must not seize the active composer');
+    assert.equal(subject.autonomousTurnId, undefined);
+    subject.backgroundMessages.push(
+      'acp-session', '[Background process proc_tv completed]', 'proc_tv',
+    );
+
+    subject.handleAutonomousTurn({
+      session_id: 'acp-session',
+      autonomousTurn: { id: 'proc_tv', status: 'running', trigger: 'background_notification' },
+    });
+    assert.equal(subject.busy, true);
+    assert.equal(subject.autonomousTurnId, 'proc_tv');
+    assert.equal(subject.store.active()?.messages.at(-1)?.role, 'agent');
+    assert.equal(subject.store.active()?.messages.at(-1)?.text,
+      '[Background process proc_tv completed]');
+    assert.equal(posted.at(-1)?.type, 'busy');
+    assert.equal(posted.at(-1)?.active, true);
+
+    subject.lastTurnText = 'The Technical Validator passed; continuing implementation.';
+    subject.handleAutonomousTurn({
+      session_id: 'acp-session',
+      autonomousTurn: { id: 'proc_tv', status: 'completed', trigger: 'background_notification' },
+    });
+
+    assert.equal(subject.busy, false);
+    assert.equal(subject.autonomousTurnId, undefined);
+    assert.equal(subject.store.active()?.messages.at(-1)?.text,
+      'The Technical Validator passed; continuing implementation.');
+    assert.deepEqual(posted.slice(-2), [
+      { type: 'done' },
+      { type: 'busy', active: false, queued: 0, queuedItems: [] },
+    ]);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('persists an inactive session autonomous Lead response without seizing the visible composer', () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-inactive-autonomous-turn-'));
+  const state = new Map<string, unknown>();
+  state.set('hermes.sessions', [
+    {
+      id: 'old-chat', title: 'Old Lead chat', createdAt: 1, messages: [],
+      acpSessionId: 'old-acp-session',
+    },
+    {
+      id: 'visible-chat', title: 'Visible chat', createdAt: 2, messages: [],
+      acpSessionId: 'visible-acp-session',
+    },
+  ]);
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const posted: Array<Record<string, unknown>> = [];
+  const session = { getSessionId: (): string => 'visible-acp-session' };
+
+  try {
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      busy: boolean;
+      post(message: Record<string, unknown>): void;
+      captureAutonomousEvent(event: Record<string, unknown>): boolean;
+      handleAutonomousTurn(event: Record<string, unknown>): void;
+      store: {
+        allSessions(): Array<{ id: string; messages: Array<{ role: string; text: string }> }>;
+      };
+    };
+    subject.post = message => { posted.push(message); };
+
+    subject.handleAutonomousTurn({
+      session_id: 'old-acp-session',
+      autonomousTurn: {
+        id: 'old-turn', status: 'running', trigger: 'background_notification',
+      },
+    });
+    assert.equal(subject.captureAutonomousEvent({
+      session_id: 'old-acp-session',
+      autonomousTurnId: 'old-turn',
+      text: 'The old Lead consumed the role result and completed its next step.',
+    }), true, 'inactive output must be consumed without rendering in the visible chat');
+    assert.equal(subject.captureAutonomousEvent({
+      session_id: 'old-acp-session',
+      autonomousTurnId: 'old-turn',
+      toolTitle: 'write_file',
+      toolStatus: 'completed',
+      toolDetail: 'saved old-chat output',
+    }), true, 'inactive tool updates must stay on the owning hidden chat');
+    subject.handleAutonomousTurn({
+      session_id: 'old-acp-session',
+      autonomousTurn: {
+        id: 'old-turn', status: 'completed', trigger: 'background_notification',
+      },
+    });
+
+    const oldChat = subject.store.allSessions().find(chat => chat.id === 'old-chat');
+    const visibleChat = subject.store.allSessions().find(chat => chat.id === 'visible-chat');
+    assert.equal(oldChat?.messages.at(-2)?.text, '✓ write_file: saved old-chat output');
+    assert.equal(oldChat?.messages.at(-1)?.text,
+      'The old Lead consumed the role result and completed its next step.');
+    assert.deepEqual(visibleChat?.messages, []);
+    assert.equal(subject.busy, false);
+    assert.equal(posted.some(message => message.type === 'busy' || message.type === 'done'), false);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});

@@ -65,6 +65,24 @@ class FakeClient {
       },
     });
   }
+
+  emitAutonomousTurn(sessionId: string, status: 'running' | 'completed' | 'failed', id = 'auto-proc'): void {
+    this.emitUpdate(sessionId, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: '' },
+      _meta: {
+        hermes: {
+          backgroundNotification: true,
+          autonomousTurn: { id, status, trigger: 'background_notification' },
+          agentActivities: [{
+            id: 'primary',
+            name: 'Hermes Lead',
+            status: status === 'running' ? 'running' : 'idle',
+          }],
+        },
+      },
+    });
+  }
 }
 
 function managerWithEvents(client: FakeClient): { manager: SessionManager; events: SessionUpdateEvent[] } {
@@ -124,6 +142,80 @@ test('keeps streaming messages inside an active prompt as foreground', async () 
   assert.equal(events.at(-1)?.background, false);
   client.promptResolve?.();
   await prompt;
+});
+
+test('keeps stream dedup isolated from an inactive session autonomous lifecycle', async () => {
+  const client = new FakeClient();
+  client.holdPrompt = true;
+  const { manager, events } = managerWithEvents(client);
+  const prompt = manager.sendPrompt('foreground work', '/tmp');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  client.emit('active-session', 'Hello ');
+  client.emitAutonomousTurn('inactive-session', 'running', 'inactive-turn');
+  client.emit('active-session', 'Hello world');
+
+  const activeChunks = events.filter(event =>
+    event.session_id === 'active-session' && event.text !== undefined,
+  );
+  assert.deepEqual(activeChunks.map(event => event.text), ['Hello ', 'world']);
+  const inactiveRunning = events.find(event =>
+    event.session_id === 'inactive-session' && event.autonomousTurn?.status === 'running',
+  );
+  assert.equal(inactiveRunning?.background, false);
+
+  client.promptResolve?.();
+  await prompt;
+});
+
+test('keeps an autonomous continuation as one foreground turn with lifecycle boundaries', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitAutonomousTurn('active-session', 'running');
+  client.emit('active-session', 'Lead continues without a user nudge.');
+  client.emitAutonomousTurn('active-session', 'completed');
+
+  const started = events.find(event => event.autonomousTurn?.status === 'running');
+  const response = events.find(event => event.text === 'Lead continues without a user nudge.');
+  const completed = events.find(event => event.autonomousTurn?.status === 'completed');
+  assert.equal(started?.background, false);
+  assert.equal(response?.background, false);
+  assert.equal(completed?.background, false);
+});
+
+test('routes an inactive session autonomous response without accepting unrelated cross-posts', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitAutonomousTurn('inactive-session', 'running', 'inactive-turn');
+  client.emit('inactive-session', 'Lead completed the old chat autonomously.');
+  client.emitAutonomousTurn('inactive-session', 'completed', 'inactive-turn');
+  client.emit('unrelated-session', 'must still be ignored');
+
+  const response = events.find(
+    event => event.text === 'Lead completed the old chat autonomously.',
+  );
+  assert.equal(response?.session_id, 'inactive-session');
+  assert.equal(response?.autonomousTurnId, 'inactive-turn');
+  assert.equal(response?.background, false);
+  assert.equal(events.some(event => event.text === 'must still be ignored'), false);
+});
+
+test('Stop cancels a server-initiated autonomous continuation', async () => {
+  const client = new FakeClient();
+  const { manager } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitAutonomousTurn('active-session', 'running');
+  await manager.cancel();
+
+  assert.deepEqual(client.notifications, [{
+    method: 'session/cancel',
+    params: { sessionId: 'active-session' },
+  }]);
 });
 
 test('cancel keeps the active turn pending until the ACP prompt terminates', async () => {
