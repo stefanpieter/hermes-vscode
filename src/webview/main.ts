@@ -16,7 +16,7 @@ import {
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
 import { isKnownSlashCommand } from '../slashCommands';
-import { primaryAgentActivity } from '../agentActivity';
+import { primaryAgentActivity, shouldPulseComposer } from '../agentActivity';
 import { renderQueuedMessagesMarkup } from './queueControls';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
@@ -92,6 +92,7 @@ function renderAgentBar(): void {
     primaryAgentActivity(S.isBusy, S.currentContextUsed, S.knownContextSize || undefined),
     S.agentActivities,
   );
+  composer.classList.toggle('busy-glow', shouldPulseComposer(S.isBusy, S.agentActivities));
 }
 
 // ── Helpers ──────────────────────────────────────────
@@ -99,7 +100,6 @@ function setBusy(active: boolean, queued = 0): void {
   S.isBusy = active;
   renderAgentBar();
   logoMark.classList.toggle('busy', active);
-  composer.classList.toggle('busy-glow', active);
   sendBtn.style.display = active ? 'none' : 'block';
   busyBtns.style.display = active ? 'flex' : 'none';
   if (queued > 0) {

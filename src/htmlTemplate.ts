@@ -709,7 +709,7 @@ const CSS_TEMPLATE = /* css */ `
       0%, 100% { border-color: rgba(244, 135, 113, 0.45); box-shadow: 0 0 4px rgba(244,135,113,0.15); }
       50%       { border-color: rgba(244, 135, 113, 0.90); box-shadow: 0 0 14px rgba(244,135,113,0.40); }
     }
-    /* Busy glow — applied while the agent is working */
+    /* Active-work glow — applied for an ACP prompt or validated standalone role work. */
     #composer.busy-glow { animation: composer-glow-gold 1.6s ease-in-out infinite; }
     /* YOLO mode — persistent red glow (future /yolo slash command) */
     #composer.yolo { border-color: rgba(244, 135, 113, 0.7); }

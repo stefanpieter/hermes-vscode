@@ -75,6 +75,10 @@ export function primaryAgentActivity(
   };
 }
 
+export function shouldPulseComposer(busy: boolean, activities: readonly AgentActivity[]): boolean {
+  return busy || activities.some(activity => activity.status === 'starting' || activity.status === 'running');
+}
+
 /** Explicit adapter metadata wins when it supplies the primary role identity. */
 export function mergeAgentActivities(
   primary: AgentActivity,

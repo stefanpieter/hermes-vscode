@@ -4,6 +4,7 @@ import {
   mergeAgentActivities,
   parseAgentActivities,
   primaryAgentActivity,
+  shouldPulseComposer,
 } from '../agentActivity';
 
 test('parses only explicit Hermes agent activity metadata', () => {
@@ -76,4 +77,19 @@ test('explicit runtime metadata replaces duplicate primary state without inventi
     { id: 'primary', name: 'Lead / PM', status: 'running', contextUsed: 14000, contextSize: 100000 },
     { id: 'role-developer', name: 'Developer', status: 'completed' },
   ]);
+});
+
+test('composer activity remains visible while authoritative standalone work is active', () => {
+  assert.equal(shouldPulseComposer(false, [
+    { id: 'role-run:developer', name: 'Developer', status: 'starting' },
+  ]), true);
+  assert.equal(shouldPulseComposer(false, [
+    { id: 'role-run:developer', name: 'Developer', status: 'running' },
+  ]), true);
+  assert.equal(shouldPulseComposer(true, []), true);
+  assert.equal(shouldPulseComposer(false, [
+    { id: 'role-run:developer', name: 'Developer', status: 'completed' },
+    { id: 'role-run:validator', name: 'Validator', status: 'idle' },
+    { id: 'role-run:planner', name: 'Planner', status: 'blocked' },
+  ]), false);
 });

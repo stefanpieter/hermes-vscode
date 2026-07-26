@@ -23,6 +23,12 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.4.1] — 2026-07-26
+
+### Changed
+
+- The composer now keeps pulsing while an authoritative standalone role is `starting` or `running`, so a Lead waiting for delegated work does not appear to have stopped; this visual signal does not mark the ACP turn busy or disable input.
+
 ## [3.4.0] — 2026-07-25
 
 ### Added
