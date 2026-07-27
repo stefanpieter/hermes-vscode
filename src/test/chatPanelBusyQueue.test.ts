@@ -55,6 +55,7 @@ class BindingRaceClient {
   incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   sessionNewResolve: (() => void) | null = null;
   sessionLoadResolve: (() => void) | null = null;
+  holdSessionNew = true;
   calls: Array<{ method: string; params: unknown }> = [];
   notifications: Array<{ method: string; params: unknown }> = [];
 
@@ -69,7 +70,9 @@ class BindingRaceClient {
   async call(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params });
     if (method === 'session/new') {
-      await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
+      if (this.holdSessionNew) {
+        await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
+      }
       return { sessionId: 'binding-session' };
     }
     if (method === 'session/load') {
@@ -217,7 +220,10 @@ test('reconnects ACP before starting a prompt after the client has stopped', asy
       _text: string,
       _cwd: string,
       onSessionBound?: (sessionId: string) => void,
+      beforeSessionBinding?: () => Promise<void>,
     ): Promise<void> => {
+      events.push('owned');
+      await beforeSessionBinding?.();
       onSessionBound?.('acp-session');
       events.push('prompt');
     },
@@ -254,7 +260,73 @@ test('reconnects ACP before starting a prompt after the client has stopped', asy
     await subject.handleFromWebview({ type: 'send', text: 'Resume safely', requestId: 'reconnect' });
     await new Promise(resolve => setImmediate(resolve));
 
-    assert.deepEqual(events, ['connect', 'prompt']);
+    assert.deepEqual(events, ['owned', 'connect', 'prompt']);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('Stop while reconnect is pending prevents that prompt from starting', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-reconnect-cancel-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const client = new BindingRaceClient();
+  const session = new SessionManager(client as never);
+  let announceReconnect: () => void = () => {};
+  let releaseReconnect: () => void = () => {};
+  const reconnectStarted = new Promise<void>(resolve => { announceReconnect = resolve; });
+  const profileController = {
+    currentProfile: (): string => '',
+    profileItems: (): [] => [],
+    restartRequired: (): boolean => false,
+    selectProfile: async (): Promise<boolean> => false,
+    customProfile: async (): Promise<boolean> => false,
+    restartHermes: async (): Promise<void> => undefined,
+    ensureConnected: async (): Promise<void> => {
+      announceReconnect();
+      await new Promise<void>(resolve => { releaseReconnect = resolve; });
+    },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session,
+      'test-model',
+      'test-version',
+      context as never,
+      () => {},
+      profileController,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Do not start', requestId: 'cancel-reconnect' });
+    await reconnectStarted;
+    await subject.handleFromWebview({ type: 'cancel' });
+    releaseReconnect();
+    await new Promise(resolve => setImmediate(resolve));
+    client.sessionNewResolve?.();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(
+      client.calls.some(call => call.method === 'session/prompt'),
+      false,
+      'a stopped reconnecting turn must not reach session/prompt after reconnect resolves',
+    );
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }

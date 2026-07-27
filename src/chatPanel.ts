@@ -895,12 +895,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     try {
-      // A long-lived ACP child can exit after view hydration. Reconnect at the
-      // actual prompt boundary so Send never targets a stale stopped client.
-      await this.profileController?.ensureConnected?.();
       // SessionManager establishes turn cancellation ownership before binding,
-      // while the binding callback persists ACP ownership before session/prompt.
-      await sendPromptWithSessionBinding(this.session, this.store, prompt, cwd);
+      // including reconnect, while the binding callback persists ACP ownership
+      // before session/prompt.
+      await sendPromptWithSessionBinding(
+        this.session,
+        this.store,
+        prompt,
+        cwd,
+        async () => { await this.profileController?.ensureConnected?.(); },
+      );
     } catch (err) {
       const msg = String(err);
       if (msg.includes('Cancelled')) {

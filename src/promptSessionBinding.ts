@@ -3,6 +3,7 @@ export interface PromptSessionManager {
     text: string,
     cwd: string,
     onSessionBound?: (sessionId: string) => void,
+    beforeSessionBinding?: () => Promise<void>,
   ): Promise<void>;
 }
 
@@ -19,8 +20,9 @@ export async function sendPromptWithSessionBinding(
   store: PromptSessionStore,
   text: string,
   cwd: string,
+  beforeSessionBinding?: () => Promise<void>,
 ): Promise<void> {
   await session.sendPrompt(text, cwd, sessionId => {
     store.setAcpSessionId(sessionId);
-  });
+  }, beforeSessionBinding);
 }

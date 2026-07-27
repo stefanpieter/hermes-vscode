@@ -14,6 +14,11 @@ class FakeClient {
   emitBackgroundDuringLoad = false;
   calls: { method: string; params: unknown }[] = [];
   notifications: { method: string; params: unknown }[] = [];
+  exitHandlers: Array<(code: number) => void> = [];
+
+  on(event: string, handler: (code: number) => void): void {
+    if (event === 'exit') this.exitHandlers.push(handler);
+  }
 
   onNotification(handler: (method: string, params: unknown) => void): void {
     this.notificationHandler = handler;
@@ -83,6 +88,10 @@ class FakeClient {
       },
     });
   }
+
+  emitExit(code = 1): void {
+    for (const handler of this.exitHandlers) handler(code);
+  }
 }
 
 function managerWithEvents(client: FakeClient): { manager: SessionManager; events: SessionUpdateEvent[] } {
@@ -116,6 +125,55 @@ test('reset invalidates an in-flight session binding', async () => {
 
   await assert.rejects(binding, /superseded by reset/);
   assert.equal(manager.getSessionId(), null);
+});
+
+test('an ACP child exit forces the next prompt to load the persisted session before prompting', async () => {
+  const client = new FakeClient();
+  const { manager } = managerWithEvents(client);
+  await manager.sendPrompt('first turn', '/tmp');
+  assert.equal(manager.getSessionId(), 'active-session');
+
+  client.calls.length = 0;
+  client.emitExit(7);
+  await manager.sendPrompt('after restart', '/tmp');
+
+  assert.deepEqual(client.calls.map(call => call.method), [
+    'session/load',
+    'session/set_mode',
+    'session/prompt',
+  ]);
+  assert.equal(
+    (client.calls.at(-1)?.params as { sessionId?: string }).sessionId,
+    'active-session',
+  );
+});
+
+test('Stop while reconnect is pending prevents session binding and prompt startup', async () => {
+  const client = new FakeClient();
+  const { manager } = managerWithEvents(client);
+  let reconnectResolve!: () => void;
+  let reconnectStarted = false;
+  const reconnect = async (): Promise<void> => {
+    reconnectStarted = true;
+    await new Promise<void>(resolve => { reconnectResolve = resolve; });
+  };
+  const sendPrompt = manager.sendPrompt.bind(manager) as (
+    text: string,
+    cwd: string,
+    onSessionBound?: (sessionId: string) => void,
+    beforeSessionBinding?: () => Promise<void>,
+  ) => Promise<void>;
+
+  const outcome = sendPrompt('cancel reconnect', '/tmp', undefined, reconnect)
+    .then(() => 'resolved', (err: Error) => err.message);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reconnectStarted, true, 'reconnect must run inside prompt ownership');
+
+  await manager.cancel();
+  reconnectResolve();
+
+  assert.equal(await outcome, 'Cancelled');
+  assert.deepEqual(client.calls, [], 'cancelled reconnect must not bind or prompt');
 });
 
 test('marks agent messages received after prompt completion as background', async () => {

@@ -27,7 +27,8 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 
 ### Fixed
 
-- Composer sends now verify and, when necessary, restart the ACP client at the prompt boundary, preventing a long-lived window from failing with `ACP client not started` after its child process exits.
+- Composer sends now verify and, when necessary, restart the ACP client inside the prompt's cancellation boundary, preventing a long-lived window from failing with `ACP client not started` after its child process exits.
+- Replacement ACP children now explicitly reload the persisted session before prompting, and Stop during reconnect prevents that delayed prompt from starting.
 
 ## [3.4.2] — 2026-07-27
 

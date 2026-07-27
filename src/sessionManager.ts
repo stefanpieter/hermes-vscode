@@ -86,6 +86,13 @@ export class SessionManager {
       }
       throw new Error(`Unhandled client method: ${method}`);
     });
+
+    // ACP session registrations belong to one child process generation. An
+    // unexpected child exit makes the current ID resumable, not promptable,
+    // until the replacement child receives session/load (or session/new).
+    (client as unknown as {
+      on?: (event: string, handler: (code: number) => void) => unknown;
+    }).on?.('exit', () => this.handleClientExit());
   }
 
   onUpdate(handler: SessionUpdateHandler): void {
@@ -229,6 +236,7 @@ export class SessionManager {
     text: string,
     cwd: string,
     onSessionBound?: (sessionId: string) => void,
+    beforeSessionBinding?: () => Promise<void>,
   ): Promise<void> {
     if (this.activePromptTurn) throw new Error('Prompt already active');
     const turn: PromptTurn = {
@@ -240,6 +248,8 @@ export class SessionManager {
     this.activePromptTurn = turn;
 
     try {
+      await beforeSessionBinding?.();
+      if (turn.cancelled) throw new Error('Cancelled');
       const sessionId = await this.ensureSession(cwd);
       turn.sessionId = sessionId;
       this.accumulatedBySession.set(sessionId, '');
@@ -304,6 +314,18 @@ export class SessionManager {
     // Binding-only cancellation is local because no session/prompt exists yet.
     // Once prompting starts, sendPrompt remains pending until that call terminates.
     this.client.notify('session/cancel', { sessionId: turn.sessionId });
+  }
+
+  private handleClientExit(): void {
+    const resumableSessionId = this.sessionId;
+    this.log(`[session] ACP child exited${resumableSessionId ? `; will reload ${resumableSessionId}` : ''}`);
+    this.bindingGeneration += 1;
+    this.sessionBinding = undefined;
+    this.replayBinding = undefined;
+    this.sessionId = null;
+    if (resumableSessionId) this.storedSessionId = resumableSessionId;
+    this.accumulatedBySession.clear();
+    this.autonomousTurnsBySession.clear();
   }
 
   reset(): void {
