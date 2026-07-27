@@ -27,8 +27,8 @@ The grouped `/` menu exposes commands that need no free-form argument. Hermes AC
 
 | Surface | Commands |
 |---------|----------|
-| **Menu** | `/compact`, `/context`, `/tools`, `/version`, `/help`, `/reset` (with confirmation) |
-| **Composer/API** | `/help`, `/model`, `/tools`, `/context`, `/reset`, `/compact`, `/steer`, `/queue`, `/version` |
+| **Menu** | `/compress`, `/context`, `/tools`, `/version`, `/help`, `/reset` (with confirmation) |
+| **Composer/API** | `/help`, `/model`, `/tools`, `/context`, `/reset`, `/compress`, `/steer`, `/queue`, `/version` |
 
 Slash command responses render as centered system messages, not conversation bubbles.
 

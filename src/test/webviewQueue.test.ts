@@ -13,6 +13,8 @@ test('host and webview share slash-command classification', () => {
   assert.equal(isKnownSlashCommand('/help'), true);
   assert.equal(isKnownSlashCommand('/STEER use the safer approach'), true);
   assert.equal(isKnownSlashCommand('/queue verify after completion'), true);
+  assert.equal(isKnownSlashCommand('/compress now'), true);
+  assert.equal(isKnownSlashCommand('/compact now'), false);
   assert.equal(isKnownSlashCommand('/status'), false);
   assert.equal(isKnownSlashCommand('/title locally handled only'), false);
   assert.equal(isKnownSlashCommand('/not-a-command'), false);

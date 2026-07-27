@@ -143,7 +143,7 @@ ${CSS_TEMPLATE}
       <button class="cmd-btn" id="overflow-btn" title="Slash commands"><span class="btn-icon">/</span></button>
       <div id="overflow-menu" style="display:none">
       <div class="menu-group-label">Session</div>
-      <div class="menu-item" data-cmd="/compact" data-mode="execute"><span class="cmd-name">/compact</span> Compress context</div>
+      <div class="menu-item" data-cmd="/compress" data-mode="execute"><span class="cmd-name">/compress</span> Compress context</div>
 
       <div class="menu-group-label">Info</div>
       <div class="menu-item" data-cmd="/context" data-mode="execute"><span class="cmd-name">/context</span> Context info</div>

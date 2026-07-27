@@ -6,6 +6,12 @@ The `v1.x` and `v2.x` majors were premature — milestones in the author's head,
 
 ---
 
+## [3.2.13] — 2026-07-27
+
+### Fixed
+
+- The slash-command menu, system-response classifier, and documentation now use Hermes ACP's current `/compress` command instead of obsolete `/compact`, preventing context-compression requests from falling through to the model as ordinary prose.
+
 ## [3.2.12] — 2026-07-22
 
 ### Fixed

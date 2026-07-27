@@ -42,7 +42,7 @@ Always bump the version in `package.json` before packaging a testable build:
 - `tool_call_update` includes: `toolCallId`, `status`, `rawOutput` (may contain todo JSON), `content[]`
 - Token data: `PromptResponse.usage.inputTokens` = last_prompt_tokens, `_meta.contextLength` = model context window size
 
-Hermes server patch at `~/.hermes/hermes-agent/acp_adapter/server.py` — extracts top-level token keys and injects `contextLength` into `_meta`. Also patched `/compact` to call `_compress_context()` correctly. Do not revert.
+Hermes server patch at `~/.hermes/hermes-agent/acp_adapter/server.py` — extracts top-level token keys and injects `contextLength` into `_meta`. Also patched `/compress` to call `_compress_context()` correctly. Do not revert.
 
 ## Live file integration
 

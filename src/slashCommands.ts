@@ -1,6 +1,6 @@
 /** Known ACP adapter slash commands that return system-style responses. */
 const KNOWN_SLASH_COMMANDS = new Set([
-  'help', 'model', 'tools', 'context', 'reset', 'compact', 'steer', 'queue',
+  'help', 'model', 'tools', 'context', 'reset', 'compress', 'steer', 'queue',
   'version',
 ]);
 
