@@ -509,7 +509,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.postQueueState();
 
     } else if (msg.type === 'deleteQueuedMessage' && msg.requestId) {
-      deleteQueuedMessage(this.messageQueue, msg.requestId);
+      const queued = this.messageQueue.find(item => item.requestId === msg.requestId);
+      if (!queued) {
+        this.postQueueState();
+        return;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        'Delete this queued message?',
+        { modal: true, detail: 'The message will not run after the active turn.' },
+        'Delete',
+      );
+      if (choice === 'Delete') deleteQueuedMessage(this.messageQueue, msg.requestId);
       this.postQueueState();
 
     } else if (msg.type === 'cancel') {

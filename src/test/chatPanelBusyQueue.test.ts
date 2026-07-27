@@ -13,6 +13,11 @@ const vscodeWindow = {
   activeTextEditor: undefined as unknown,
   tabGroups: { all: [] },
   showInputBox: async (): Promise<string | undefined> => undefined,
+  showWarningMessage: async (
+    _message: string,
+    _options?: unknown,
+    ..._items: string[]
+  ): Promise<string | undefined> => undefined,
 };
 const originalLoad = moduleLoader._load;
 moduleLoader._load = function loadWithVscodeStub(
@@ -574,6 +579,7 @@ test('edits and deletes composer-owned queue entries before handoff', async () =
 
   try {
     vscodeWindow.activeTextEditor = undefined;
+    vscodeWindow.showWarningMessage = async () => undefined;
     const provider = new ChatPanelProvider(
       { fsPath: '/extension' } as never,
       session as never,
@@ -635,6 +641,14 @@ test('edits and deletes composer-owned queue entries before handoff', async () =
     assert.equal(subject.messageQueue[0].text, '/queue revised instruction', 'an empty edit must be ignored');
 
     await subject.handleFromWebview({ type: 'deleteQueuedMessage', requestId: 'queued-2' });
+    assert.deepEqual(
+      subject.messageQueue.map(item => item.requestId),
+      ['queued-1', 'queued-2'],
+      'dismissing the supported VS Code confirmation must retain the queued message',
+    );
+
+    vscodeWindow.showWarningMessage = async () => 'Delete';
+    await subject.handleFromWebview({ type: 'deleteQueuedMessage', requestId: 'queued-2' });
     assert.deepEqual(subject.messageQueue.map(item => item.requestId), ['queued-1']);
     assert.deepEqual(posted.filter(message => message.type === 'queueState').at(-1), {
       type: 'queueState',
@@ -658,6 +672,7 @@ test('edits and deletes composer-owned queue entries before handoff', async () =
     promptResolvers.shift()?.();
     await new Promise(resolve => setImmediate(resolve));
   } finally {
+    vscodeWindow.showWarningMessage = async () => undefined;
     rmSync(storageRoot, { recursive: true, force: true });
   }
 });

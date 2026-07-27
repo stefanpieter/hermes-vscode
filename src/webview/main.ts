@@ -10,7 +10,6 @@ import { createInitialState } from './state';
 import {
   acknowledgeStartedQueuedMessage,
   createComposerRequestId,
-  deleteQueuedMessage,
   editQueuedMessage,
   hydrateWebviewQueueState,
   registerSubmittedWebviewMessage,
@@ -411,11 +410,9 @@ queueItems.addEventListener('click', (e) => {
     return;
   }
   if (action === 'delete') {
-    // eslint-disable-next-line no-alert
-    if (!confirm('Delete this queued message?')) return;
-    deleteQueuedMessage(S.pendingQueuedMessages, requestId);
-    if (S.editingQueuedRequestId === requestId) S.editingQueuedRequestId = undefined;
-    renderQueuedMessages();
+    // Native browser confirm() dialogs are blocked by VS Code's sandboxed
+    // webview. Ask the Extension Host to use VS Code's supported modal UI and
+    // wait for its authoritative queueState response before changing the row.
     vscode.postMessage({ type: 'deleteQueuedMessage', requestId });
     return;
   }
