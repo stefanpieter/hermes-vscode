@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseBackgroundProcessFromToolUpdate } from '../protocol';
+import { parseBackgroundProcessFromToolUpdate, parseCompressionCount } from '../protocol';
 
 test('parses terminal background start results', () => {
   const state = parseBackgroundProcessFromToolUpdate({
@@ -28,4 +28,19 @@ test('parses process running and terminal states', () => {
 
 test('ignores unrelated tool output', () => {
   assert.equal(parseBackgroundProcessFromToolUpdate({ rawOutput: '{"todos":[]}' }), undefined);
+});
+
+test('parses authoritative Lead compression count from Hermes ACP metadata', () => {
+  assert.equal(parseCompressionCount({
+    sessionUpdate: 'session_info_update',
+    _meta: { hermes: { sessionProvenance: { compressionDepth: 3 } } },
+  }), 3);
+  assert.equal(parseCompressionCount({
+    sessionUpdate: 'usage_update',
+    _meta: { hermes: { compressionCount: 4 } },
+  }), 4);
+  assert.equal(parseCompressionCount({
+    sessionUpdate: 'usage_update',
+    _meta: { hermes: { compressionCount: -1 } },
+  }), undefined);
 });

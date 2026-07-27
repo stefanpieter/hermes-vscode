@@ -3,9 +3,10 @@ import type { AgentActivity } from './agentActivity';
 import type { AvailableSlashCommand } from './slashCommands';
 
 export interface SessionContextUsage {
-  contextUsed: number;
+  contextUsed?: number;
   contextSize?: number;
   cachedTokens?: number;
+  compressionCount?: number;
 }
 
 export function sessionReadyUiMessages(

@@ -501,6 +501,7 @@ test('forwards explicit agent activity carried by Hermes ACP metadata', async ()
     size: 100000,
     _meta: {
       hermes: {
+        compressionCount: 2,
         agentActivities: [
           { id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 9000, contextSize: 100000 },
         ],
@@ -511,4 +512,23 @@ test('forwards explicit agent activity carried by Hermes ACP metadata', async ()
   assert.deepEqual(events.at(-1)?.agentActivities, [
     { id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 9000, contextSize: 100000 },
   ]);
+  assert.equal(events.at(-1)?.compressionCount, 2);
+});
+
+test('forwards compression-only metadata updates without requiring token usage or a title', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'usage_update',
+    _meta: { hermes: { compressionCount: 3 } },
+  });
+  assert.equal(events.at(-1)?.compressionCount, 3);
+
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'session_info_update',
+    _meta: { hermes: { sessionProvenance: { compressionDepth: 4 } } },
+  });
+  assert.equal(events.at(-1)?.compressionCount, 4);
 });

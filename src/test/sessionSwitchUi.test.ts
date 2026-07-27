@@ -36,7 +36,7 @@ test('rehydrates authoritative agent activity, commands, and primary context wit
     [],
     [{ id: 'role-planner', name: 'Planner', status: 'running', contextUsed: 8000, contextSize: 100000 }],
     [{ name: 'doctor', description: 'Run diagnostics' }],
-    { contextUsed: 12000, contextSize: 200000, cachedTokens: 3000 },
+    { contextUsed: 12000, contextSize: 200000, cachedTokens: 3000, compressionCount: 2 },
   );
 
   assert.deepEqual(messages, [
@@ -52,6 +52,7 @@ test('rehydrates authoritative agent activity, commands, and primary context wit
       contextUsed: 12000,
       contextSize: 200000,
       cachedTokens: 3000,
+      compressionCount: 2,
     },
   ]);
 });

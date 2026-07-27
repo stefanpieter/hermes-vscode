@@ -5,14 +5,18 @@ import type { AgentActivity } from './agentActivity';
 
 export interface RoleRunScope {
   workspaceRoot: string;
-  sessionCreatedAt: number;
   scopeId?: string;
 }
 
 interface ParsedRoleRun {
   activity: AgentActivity;
   startedAt: number;
-  active: boolean;
+}
+
+export interface RoleRunLoadOptions {
+  now?: () => number;
+  processIsAlive?: (pid: number) => boolean;
+  heartbeatStaleAfterMs?: number;
 }
 
 const STATUS_MAP: Readonly<Record<string, AgentActivity['status']>> = {
@@ -26,6 +30,17 @@ const STATUS_MAP: Readonly<Record<string, AgentActivity['status']>> = {
 };
 const ROLE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_MANIFEST_BYTES = 64 * 1024;
+const DEFAULT_HEARTBEAT_STALE_AFTER_MS = 60_000;
+const MAX_HEARTBEAT_FUTURE_SKEW_MS = 5_000;
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -43,6 +58,7 @@ function parseManifest(
   raw: unknown,
   manifestDirectory: string,
   scope: RoleRunScope,
+  options: Required<RoleRunLoadOptions>,
 ): ParsedRoleRun | undefined {
   const data = record(raw);
   if (!data || data.schema_version !== '1.0.0' || data.execution_mode !== 'standalone_fresh_session') return undefined;
@@ -51,7 +67,7 @@ function parseManifest(
   if (!repoRoot || path.resolve(repoRoot) !== path.resolve(scope.workspaceRoot)) return undefined;
 
   const startedAt = typeof data.started_at === 'string' ? Date.parse(data.started_at) : Number.NaN;
-  if (!Number.isFinite(startedAt) || startedAt < scope.sessionCreatedAt) return undefined;
+  if (!Number.isFinite(startedAt)) return undefined;
 
   const role = typeof data.role === 'string' ? data.role.trim() : '';
   const roleId = typeof data.role_id === 'string' ? data.role_id.trim() : '';
@@ -60,20 +76,32 @@ function parseManifest(
   if (!role || role.length > 100 || !ROLE_ID.test(roleId) || !runId || !status) return undefined;
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(runId) || runId !== path.basename(manifestDirectory)) return undefined;
 
+  // This bar is a live control surface, not role history. Active-looking
+  // manifests must still have both a live child and a fresh runner heartbeat.
+  if (data.status !== 'starting' && data.status !== 'running') return undefined;
+  const pid = safeTokenCount(data.pid);
+  const heartbeatAt = typeof data.heartbeat_at === 'string' ? Date.parse(data.heartbeat_at) : Number.NaN;
+  if (!pid || !options.processIsAlive(pid)) return undefined;
+  const heartbeatAge = options.now() - heartbeatAt;
+  if (!Number.isFinite(heartbeatAt)
+    || heartbeatAge < -MAX_HEARTBEAT_FUTURE_SKEW_MS
+    || heartbeatAge > options.heartbeatStaleAfterMs) return undefined;
+
   const context = record(data.context);
   const contextUsed = safeTokenCount(data.context_used ?? context?.used);
   const contextSize = safeTokenCount(data.context_size ?? context?.size);
+  const compressionCount = safeTokenCount(data.compression_count ?? context?.compression_count);
   const activity: AgentActivity = {
     id: `role-run:${runId}`,
     name: role,
     status,
     ...(contextUsed !== undefined ? { contextUsed } : {}),
     ...(contextSize !== undefined ? { contextSize } : {}),
+    ...(compressionCount !== undefined ? { compressionCount } : {}),
   };
   return {
     activity,
     startedAt,
-    active: data.status === 'starting' || data.status === 'running',
   };
 }
 
@@ -90,15 +118,23 @@ async function readBoundedJson(manifestPath: string): Promise<unknown> {
 }
 
 /**
- * Load canonical standalone-role manifests for one VS Code session/workspace.
+ * Load canonical live standalone-role manifests for one VS Code workspace.
  *
  * The manifest is authoritative for identity and lifecycle. Missing fields are
- * omitted rather than inferred from packet text, process names, or timestamps.
+ * omitted rather than inferred from packet text or process names. A role can
+ * predate a restored Lead session; live PID + fresh heartbeat are the runtime
+ * gates, while workspace identity prevents cross-window leakage.
  */
 export async function loadRoleRunActivities(
   runtimeRoot: string,
   scope: RoleRunScope,
+  suppliedOptions: RoleRunLoadOptions = {},
 ): Promise<AgentActivity[]> {
+  const options: Required<RoleRunLoadOptions> = {
+    now: suppliedOptions.now ?? Date.now,
+    processIsAlive: suppliedOptions.processIsAlive ?? processIsAlive,
+    heartbeatStaleAfterMs: suppliedOptions.heartbeatStaleAfterMs ?? DEFAULT_HEARTBEAT_STALE_AFTER_MS,
+  };
   let directories;
   try {
     directories = await readdir(path.join(runtimeRoot, 'runs'), { withFileTypes: true });
@@ -118,7 +154,7 @@ export async function loadRoleRunActivities(
       const manifestDirectory = path.join(runtimeRoot, 'runs', entry.name);
       try {
         const raw = await readBoundedJson(path.join(manifestDirectory, 'manifest.json'));
-        return parseManifest(raw, manifestDirectory, scope);
+        return parseManifest(raw, manifestDirectory, scope, options);
       } catch {
         return undefined;
       }
@@ -127,7 +163,7 @@ export async function loadRoleRunActivities(
 
   return parsed
     .filter((item): item is ParsedRoleRun => item !== undefined)
-    .sort((left, right) => Number(right.active) - Number(left.active) || right.startedAt - left.startedAt)
+    .sort((left, right) => right.startedAt - left.startedAt)
     .slice(0, 12)
     .map(item => item.activity);
 }
@@ -168,7 +204,7 @@ export class RoleRunMonitor {
         // role state instead of destabilising the extension host.
         activities = [];
       }
-      const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, scope.sessionCreatedAt, activities]);
+      const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, activities]);
       if (signature !== this.lastSignature) {
         this.lastSignature = signature;
         this.onUpdate(scope, activities);

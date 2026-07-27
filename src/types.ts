@@ -81,6 +81,7 @@ export interface SessionUpdateEvent {
   contextUsed?: number;
   contextSize?: number;
   cachedTokens?: number;
+  compressionCount?: number;
   availableCommands?: AvailableSlashCommand[];
   agentActivities?: AgentActivity[];
 }
@@ -116,6 +117,7 @@ export interface ToWebview {
   contextUsed?: number;
   contextSize?: number;
   cachedTokens?: number;
+  compressionCount?: number;
   version?: string;
   sessions?: ChatSession[];
   activeSessionId?: string;

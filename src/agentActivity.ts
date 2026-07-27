@@ -5,6 +5,7 @@ export interface AgentActivity {
   status: 'planned' | 'starting' | 'running' | 'idle' | 'completed' | 'blocked' | 'failed' | 'cancelled' | 'unknown';
   contextUsed?: number;
   contextSize?: number;
+  compressionCount?: number;
 }
 
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -49,12 +50,14 @@ export function parseAgentActivities(update: Record<string, unknown>): AgentActi
 
     const contextUsed = nonNegativeInteger(candidate.contextUsed ?? candidate.context_used);
     const contextSize = nonNegativeInteger(candidate.contextSize ?? candidate.context_size);
+    const compressionCount = nonNegativeInteger(candidate.compressionCount ?? candidate.compression_count);
     activities.push({
       id,
       name,
       status,
       ...(contextUsed !== undefined ? { contextUsed } : {}),
       ...(contextSize !== undefined && contextSize > 0 ? { contextSize } : {}),
+      ...(compressionCount !== undefined ? { compressionCount } : {}),
     });
     seen.add(id);
   }
@@ -65,13 +68,15 @@ export function primaryAgentActivity(
   running: boolean,
   contextUsed?: number,
   contextSize?: number,
+  compressionCount?: number,
 ): AgentActivity {
   return {
     id: 'primary',
-    name: 'Hermes',
+    name: 'Lead / PM',
     status: running ? 'running' : 'idle',
     ...(nonNegativeInteger(contextUsed) !== undefined ? { contextUsed } : {}),
     ...(nonNegativeInteger(contextSize) !== undefined && (contextSize as number) > 0 ? { contextSize } : {}),
+    ...(nonNegativeInteger(compressionCount) !== undefined ? { compressionCount } : {}),
   };
 }
 
@@ -79,11 +84,14 @@ export function shouldPulseComposer(busy: boolean, activities: readonly AgentAct
   return busy || activities.some(activity => activity.status === 'starting' || activity.status === 'running');
 }
 
-/** Explicit adapter metadata wins when it supplies the primary role identity. */
+/** Runtime metadata may refine primary status/metrics, but never its Lead / PM identity. */
 export function mergeAgentActivities(
   primary: AgentActivity,
   activities: readonly AgentActivity[],
 ): AgentActivity[] {
   const explicitPrimary = activities.find(activity => activity.id === primary.id);
-  return [explicitPrimary ?? primary, ...activities.filter(activity => activity.id !== primary.id)];
+  const mergedPrimary = explicitPrimary
+    ? { ...primary, ...explicitPrimary, id: primary.id, name: 'Lead / PM' }
+    : primary;
+  return [mergedPrimary, ...activities.filter(activity => activity.id !== primary.id)];
 }

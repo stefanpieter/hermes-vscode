@@ -16,13 +16,18 @@ async function writeManifest(root: string, runId: string, data: Record<string, u
   }));
 }
 
-test('loads workspace-scoped standalone role names, statuses, and explicit context', async () => {
+test('loads only live workspace-scoped roles with per-role context and compression telemetry', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
   const workspace = path.join(root, 'workspace');
   await mkdir(workspace);
   await writeManifest(root, 'run-developer', {
     role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
-    started_at: '2026-07-25T21:15:15.298Z', context_used: 24_000, context_size: 128_000,
+    started_at: '2026-07-25T21:15:15.298Z', heartbeat_at: '2026-07-25T21:29:50.000Z', pid: 101,
+    context_used: 799_000, context_size: 1_050_000, compression_count: 2,
+  });
+  await writeManifest(root, 'stale-running', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T21:16:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 202,
   });
   await writeManifest(root, 'run-validator', {
     role_id: 'technical-validator', role: 'Technical Validator', status: 'succeeded', repo_root: workspace,
@@ -35,12 +40,73 @@ test('loads workspace-scoped standalone role names, statuses, and explicit conte
 
   const activities = await loadRoleRunActivities(root, {
     workspaceRoot: workspace,
-    sessionCreatedAt: Date.parse('2026-07-25T21:00:00Z'),
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 101,
   });
 
   assert.deepEqual(activities, [
-    { id: 'role-run:run-developer', name: 'Developer', status: 'running', contextUsed: 24_000, contextSize: 128_000 },
-    { id: 'role-run:run-validator', name: 'Technical Validator', status: 'completed' },
+    {
+      id: 'role-run:run-developer', name: 'Developer', status: 'running',
+      contextUsed: 799_000, contextSize: 1_050_000, compressionCount: 2,
+    },
+  ]);
+});
+
+test('omits active-looking manifests whose heartbeat is stale even when the pid is reusable', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  await writeManifest(root, 'stale-heartbeat', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T21:15:15.298Z', heartbeat_at: '2026-07-25T21:20:00.000Z', pid: 101,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: workspace,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: () => true,
+  });
+  assert.deepEqual(activities, []);
+});
+
+test('rejects a live pid when its heartbeat is implausibly far in the future', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  await writeManifest(root, 'future-heartbeat', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T21:15:15.298Z', heartbeat_at: '2026-07-25T22:30:00.000Z', pid: 101,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: workspace,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: () => true,
+  });
+  assert.deepEqual(activities, []);
+});
+
+test('keeps a live same-workspace role when the Lead session is restored after it started', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  await writeManifest(root, 'restored-developer', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: '2026-07-25T20:00:00.000Z', heartbeat_at: '2026-07-25T21:29:50.000Z', pid: 303,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: workspace,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 303,
+  });
+
+  assert.deepEqual(activities, [
+    { id: 'role-run:restored-developer', name: 'Developer', status: 'running' },
   ]);
 });
 
@@ -86,7 +152,6 @@ test('excludes stale, malformed, and unsupported role manifests without guessing
 
   const activities = await loadRoleRunActivities(root, {
     workspaceRoot: workspace,
-    sessionCreatedAt: Date.parse('2026-07-25T21:00:00Z'),
   });
   assert.deepEqual(activities, []);
 });
