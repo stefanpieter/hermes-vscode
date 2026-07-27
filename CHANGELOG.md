@@ -23,6 +23,12 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.4.2] — 2026-07-27
+
+### Fixed
+
+- Queued-message Delete now uses VS Code's supported Extension Host confirmation UI instead of a browser `confirm()` call that sandboxed webviews can suppress; cancelling retains the row, while confirming deletes only the matching stable request ID and republishes authoritative queue state.
+
 ## [3.4.1] — 2026-07-26
 
 ### Changed
