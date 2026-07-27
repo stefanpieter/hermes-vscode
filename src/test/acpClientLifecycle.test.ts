@@ -22,14 +22,20 @@ class FakeChildProcess extends EventEmitter {
           const result = request.method === 'session/new'
             ? { sessionId: 'persisted-session' }
             : {};
-          this.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`);
+          const response = request.method === 'initialize' && this.initializeError
+            ? { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: this.initializeError } }
+            : { jsonrpc: '2.0', id: request.id, result };
+          this.stdout.emit('data', `${JSON.stringify(response)}\n`);
         }, this.responseDelayMs);
       }
       return true;
     },
   };
 
-  constructor(private readonly responseDelayMs: number) {
+  constructor(
+    private readonly responseDelayMs: number,
+    private readonly initializeError?: string,
+  ) {
     super();
   }
 
@@ -66,6 +72,88 @@ test('an exiting stopped process cannot detach its running replacement', async (
     assert.equal(spawned.length, 2);
     assert.equal(client.running, true, 'the old exit handler must not clear the replacement process');
 
+    client.stop();
+  } finally {
+    Object.defineProperty(childProcess, 'spawn', {
+      configurable: true,
+      value: originalSpawn,
+    });
+  }
+});
+
+test('concurrent starts share one child and wait for its initialize handshake', async () => {
+  const childProcess = require('node:child_process') as typeof import('node:child_process');
+  const originalSpawn = childProcess.spawn;
+  const spawned: FakeChildProcess[] = [];
+
+  Object.defineProperty(childProcess, 'spawn', {
+    configurable: true,
+    value: () => {
+      const process = new FakeChildProcess(50);
+      spawned.push(process);
+      return process;
+    },
+  });
+
+  try {
+    const { AcpClient } = await import('../acpClient');
+    const client = new AcpClient('/fake/hermes');
+    const first = client.start();
+    let secondSettled = false;
+    const second = client.start().finally(() => { secondSettled = true; });
+
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(spawned.length, 1, 'concurrent callers must share one ACP child');
+    assert.equal(
+      secondSettled,
+      false,
+      'every start caller must wait until the shared initialize handshake completes',
+    );
+
+    await Promise.all([first, second]);
+    assert.deepEqual(spawned[0].writes.map(message => message.method), ['initialize']);
+    client.stop();
+  } finally {
+    Object.defineProperty(childProcess, 'spawn', {
+      configurable: true,
+      value: originalSpawn,
+    });
+  }
+});
+
+test('failed initialization rejects all waiters and permits a clean retry', async () => {
+  const childProcess = require('node:child_process') as typeof import('node:child_process');
+  const originalSpawn = childProcess.spawn;
+  const spawned: FakeChildProcess[] = [];
+
+  Object.defineProperty(childProcess, 'spawn', {
+    configurable: true,
+    value: () => {
+      const process = new FakeChildProcess(
+        0,
+        spawned.length === 0 ? 'initialize refused' : undefined,
+      );
+      spawned.push(process);
+      return process;
+    },
+  });
+
+  try {
+    const { AcpClient } = await import('../acpClient');
+    const client = new AcpClient('/fake/hermes');
+    const first = client.start();
+    const second = client.start();
+
+    await Promise.all([
+      assert.rejects(first, /initialize refused/),
+      assert.rejects(second, /initialize refused/),
+    ]);
+    assert.equal(client.running, false, 'a child with a rejected handshake is not running');
+
+    await client.start();
+    assert.equal(spawned.length, 2, 'a later start must spawn a clean replacement child');
+    assert.equal(client.running, true);
     client.stop();
   } finally {
     Object.defineProperty(childProcess, 'spawn', {

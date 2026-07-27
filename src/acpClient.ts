@@ -30,6 +30,7 @@ interface PendingRequest {
 
 export class AcpClient extends EventEmitter {
   private proc: ChildProcess | null = null;
+  private startPromise: Promise<void> | null = null;
   private nextId = 1;
   private pending = new Map<number | string, PendingRequest>();
   private buffer = '';
@@ -80,8 +81,19 @@ export class AcpClient extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
     if (this.proc) return;
 
+    const startPromise = this.startProcess();
+    this.startPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.startPromise === startPromise) this.startPromise = null;
+    }
+  }
+
+  private async startProcess(): Promise<void> {
     const args = buildHermesAcpArgs(this.profile);
     this.activeProfile = this.profile;
     this.emit('log', `[acp] spawn ${this.hermesPath} ${args.join(' ')}`);
@@ -105,6 +117,7 @@ export class AcpClient extends EventEmitter {
       if (this.proc !== proc) return;
       this.emit('log', `[acp] spawn error: ${err.message}`);
       this.proc = null;
+      this.startPromise = null;
       this.buffer = '';
       this.rejectPending(new Error(`Failed to start hermes: ${err.message}`));
       this.emit('exit', -1);
@@ -113,19 +126,33 @@ export class AcpClient extends EventEmitter {
     proc.on('exit', (code) => {
       if (this.proc !== proc) return;
       this.proc = null;
+      this.startPromise = null;
       this.buffer = '';
       this.rejectPending(new Error(`hermes acp exited (code ${code})`));
       this.emit('exit', code);
     });
 
     // Handshake — protocolVersion is integer 1, params use camelCase
-    await this.call('initialize', { protocolVersion: 1 });
+    try {
+      await this.call('initialize', { protocolVersion: 1 });
+    } catch (err) {
+      if (this.proc === proc) {
+        this.proc = null;
+        this.startPromise = null;
+        this.buffer = '';
+        this.rejectPending(err instanceof Error ? err : new Error(String(err)));
+        proc.kill();
+        this.emit('exit', -1);
+      }
+      throw err;
+    }
   }
 
   stop(): void {
     const proc = this.proc;
     if (!proc) return;
     this.proc = null;
+    this.startPromise = null;
     this.buffer = '';
     this.rejectPending(new Error('hermes acp stopped'));
     proc.kill();
