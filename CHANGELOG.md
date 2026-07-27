@@ -23,6 +23,19 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.5.0] — 2026-07-27
+
+### Added
+
+- Each live agent chip can now show that agent's own current context usage and compression count (for example `799k/1M · 3 comp`) when Hermes publishes authoritative telemetry.
+- The primary ACP agent is labelled `Lead / PM`, making clear that its context counter excludes standalone role conversations.
+
+### Fixed
+
+- The activity bar now requires both a live child PID and a fresh runner heartbeat, and no longer presents completed or stale role-run manifests as running agents.
+- Restored Lead sessions retain genuinely live same-workspace roles instead of hiding them because they started before the restored session.
+- Metadata-only compression updates now survive ACP partial updates, and adapter metadata can refine primary status/metrics without renaming the primary **Lead / PM** identity.
+
 ## [3.4.4] — 2026-07-27
 
 ### Fixed

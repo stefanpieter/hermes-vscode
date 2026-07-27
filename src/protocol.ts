@@ -224,6 +224,24 @@ export function parseUsageUpdate(update: RawUpdate): ParsedUsageUpdate | null {
   return null;
 }
 
+/** Parse Hermes' authoritative compression counter from ACP update metadata. */
+export function parseCompressionCount(update: RawUpdate): number | undefined {
+  const meta = update['_meta'];
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return undefined;
+  const hermes = (meta as Record<string, unknown>).hermes;
+  if (!hermes || typeof hermes !== 'object' || Array.isArray(hermes)) return undefined;
+  const hermesMeta = hermes as Record<string, unknown>;
+  const provenance = hermesMeta.sessionProvenance;
+  const provenanceRecord = provenance && typeof provenance === 'object' && !Array.isArray(provenance)
+    ? provenance as Record<string, unknown>
+    : undefined;
+  const raw = hermesMeta.compressionCount
+    ?? hermesMeta.compression_count
+    ?? provenanceRecord?.compressionDepth
+    ?? provenanceRecord?.compression_depth;
+  return Number.isSafeInteger(raw) && (raw as number) >= 0 ? raw as number : undefined;
+}
+
 // ── Session info parsing ─────────────────────────────
 
 /** Extract session title from a session_info_update. */

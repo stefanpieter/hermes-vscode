@@ -20,6 +20,7 @@ test('parses only explicit Hermes agent activity metadata', () => {
             status: 'running',
             contextUsed: 42000,
             contextSize: 100000,
+            compressionCount: 2,
           },
           {
             id: 'role-validator',
@@ -40,6 +41,7 @@ test('parses only explicit Hermes agent activity metadata', () => {
       status: 'running',
       contextUsed: 42000,
       contextSize: 100000,
+      compressionCount: 2,
     },
     {
       id: 'role-validator',
@@ -49,17 +51,18 @@ test('parses only explicit Hermes agent activity metadata', () => {
   ]);
 });
 
-test('primary activity uses only authoritative prompt and context state', () => {
-  assert.deepEqual(primaryAgentActivity(true, 64000, 128000), {
+test('primary activity is explicitly the Lead and uses only authoritative prompt/context state', () => {
+  assert.deepEqual(primaryAgentActivity(true, 64000, 128000, 3), {
     id: 'primary',
-    name: 'Hermes',
+    name: 'Lead / PM',
     status: 'running',
     contextUsed: 64000,
     contextSize: 128000,
+    compressionCount: 3,
   });
   assert.deepEqual(primaryAgentActivity(false), {
     id: 'primary',
-    name: 'Hermes',
+    name: 'Lead / PM',
     status: 'idle',
   });
 });
@@ -77,6 +80,22 @@ test('explicit runtime metadata replaces duplicate primary state without inventi
     { id: 'primary', name: 'Lead / PM', status: 'running', contextUsed: 14000, contextSize: 100000 },
     { id: 'role-developer', name: 'Developer', status: 'completed' },
   ]);
+});
+
+test('primary identity stays Lead / PM while explicit runtime status and partial metrics merge', () => {
+  const merged = mergeAgentActivities(
+    primaryAgentActivity(false, 12000, 100000, 3),
+    [{ id: 'primary', name: 'Hermes Lead', status: 'running', contextUsed: 14000 }],
+  );
+
+  assert.deepEqual(merged, [{
+    id: 'primary',
+    name: 'Lead / PM',
+    status: 'running',
+    contextUsed: 14000,
+    contextSize: 100000,
+    compressionCount: 3,
+  }]);
 });
 
 test('composer activity remains visible while authoritative standalone work is active', () => {

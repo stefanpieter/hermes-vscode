@@ -280,7 +280,7 @@ const CSS_TEMPLATE = /* css */ `
     #agent-activity-bar::-webkit-scrollbar { display: none; }
     .agent-chip {
       display: inline-flex; align-items: center; gap: 4px;
-      min-width: 0; flex: 0 0 auto; max-width: 220px;
+      min-width: 0; flex: 0 0 auto; max-width: 280px;
       padding: 2px 6px;
       border: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.25));
       border-radius: 999px; color: var(--vscode-descriptionForeground);
@@ -293,7 +293,7 @@ const CSS_TEMPLATE = /* css */ `
     .agent-chip.cancelled .agent-dot { background: var(--vscode-disabledForeground, #777); }
     .agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-foreground); }
     .agent-status { opacity: 0.65; text-transform: capitalize; }
-    .agent-context { opacity: 0.8; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .agent-context, .agent-compressions { opacity: 0.8; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
     /* Token progress bar — dual layer: total (faded) + fresh (solid) */
     #ctx-bar-wrap {

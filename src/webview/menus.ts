@@ -244,10 +244,19 @@ export function renderAgentActivityBar(
         : `${fmtTok(activity.contextUsed)} tok`;
       chip.append(context);
     }
+    if (activity.compressionCount !== undefined) {
+      const compressions = document.createElement('span');
+      compressions.className = 'agent-compressions';
+      compressions.textContent = `${activity.compressionCount} comp`;
+      chip.append(compressions);
+    }
     chip.title = `${activity.name} · ${activity.status}`
       + (activity.contextUsed !== undefined
         ? ` · context ${activity.contextUsed.toLocaleString()}${activity.contextSize ? ` / ${activity.contextSize.toLocaleString()}` : ''}`
-        : ' · context unavailable');
+        : ' · context unavailable')
+      + (activity.compressionCount !== undefined
+        ? ` · compressions ${activity.compressionCount}`
+        : ' · compressions unavailable');
     container.append(chip);
   }
 }

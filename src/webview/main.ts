@@ -88,7 +88,12 @@ const closeFn = () => closeAllDropdowns(dropdownEls);
 function renderAgentBar(): void {
   renderAgentActivityBar(
     agentActivityBar,
-    primaryAgentActivity(S.isBusy, S.currentContextUsed, S.knownContextSize || undefined),
+    primaryAgentActivity(
+      S.isBusy,
+      S.currentContextUsed,
+      S.knownContextSize || undefined,
+      S.currentCompressionCount,
+    ),
     S.agentActivities,
   );
   composer.classList.toggle('busy-glow', shouldPulseComposer(S.isBusy, S.agentActivities));
@@ -598,7 +603,8 @@ window.addEventListener('message', (e: MessageEvent) => {
     case 'clear':
       messagesEl.innerHTML = '';
       S.pendingQueuedMessages = []; S.prevQueueCount = 0; S.knownContextSize = 0; S.flushScheduled = false;
-      S.currentContextUsed = undefined; S.agentActivities = []; S.availableCommands = [];
+      S.currentContextUsed = undefined; S.currentCompressionCount = undefined;
+      S.agentActivities = []; S.availableCommands = [];
       S.editingQueuedRequestId = undefined;
       ctxBarWrap.style.display = 'none';
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
@@ -611,6 +617,7 @@ window.addEventListener('message', (e: MessageEvent) => {
 
     case 'statusBar': {
       updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
+      if (msg.compressionCount !== undefined) S.currentCompressionCount = msg.compressionCount;
       if (msg.availableCommands !== undefined) {
         S.availableCommands = msg.availableCommands.map(command => ({ ...command }));
         buildSlashCommandMenu(overflowMenu, S.availableCommands);

@@ -31,6 +31,7 @@ import {
   extractTextContent, deduplicateChunk,
   parseToolCall, parseToolCallUpdate,
   parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta, parseAutonomousTurnMeta,
+  parseCompressionCount,
 } from './protocol';
 import { parseAgentActivities } from './agentActivity';
 import { parseAvailableCommandsUpdate } from './slashCommands';
@@ -360,6 +361,8 @@ export class SessionManager {
       session_id,
       replay: this.replayBinding?.sessionId === session_id,
     };
+    const compressionCount = parseCompressionCount(update);
+    if (compressionCount !== undefined) event.compressionCount = compressionCount;
     const agentActivities = parseAgentActivities(update);
     if (agentActivities !== null) event.agentActivities = agentActivities;
     const autonomousTurn = parseAutonomousTurnMeta(update);
@@ -449,14 +452,14 @@ export class SessionManager {
         if (usage) {
           event.contextUsed = usage.contextUsed;
           event.contextSize = usage.contextSize;
-        } else if (!event.agentActivities) return;
+        } else if (!event.agentActivities && event.compressionCount === undefined) return;
         break;
       }
 
       case 'session_info_update': {
         const title = parseSessionInfoUpdate(update);
         if (title) event.sessionTitle = title;
-        else if (!event.agentActivities) return;
+        else if (!event.agentActivities && event.compressionCount === undefined) return;
         break;
       }
 
@@ -468,7 +471,7 @@ export class SessionManager {
       }
 
       default:
-        if (!event.agentActivities && !event.autonomousTurn) return;
+        if (!event.agentActivities && !event.autonomousTurn && event.compressionCount === undefined) return;
     }
 
     if (autonomousTurn && autonomousTurn.status !== 'running') {

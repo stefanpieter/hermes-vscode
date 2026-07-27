@@ -95,12 +95,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       () => {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) return undefined;
-        const sessions = this.store.allSessionsReversed();
-        const sessionCreatedAt = sessions.reduce(
-          (earliest, session) => Math.min(earliest, session.createdAt),
-          Date.now(),
-        );
-        return { scopeId: `workspace:${workspaceRoot}`, workspaceRoot, sessionCreatedAt };
+        return { scopeId: `workspace:${workspaceRoot}`, workspaceRoot };
       },
       (scope, activities) => {
         if (!scope.scopeId) return;
@@ -159,14 +154,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           this.post({ type: 'statusBar', availableCommands: event.availableCommands });
         }
       }
-      if (event.contextUsed !== undefined) {
+      if (event.contextUsed !== undefined || event.compressionCount !== undefined) {
+        const previous = this.contextUsageBySession.get(event.session_id) ?? {};
         this.contextUsageBySession.set(event.session_id, {
-          contextUsed: event.contextUsed,
+          ...previous,
+          ...(event.contextUsed !== undefined ? { contextUsed: event.contextUsed } : {}),
           ...(event.contextSize !== undefined ? { contextSize: event.contextSize } : {}),
           ...(event.cachedTokens !== undefined ? { cachedTokens: event.cachedTokens } : {}),
+          ...(event.compressionCount !== undefined ? { compressionCount: event.compressionCount } : {}),
         });
       }
-      if ((event.model || event.sessionTitle || event.contextUsed !== undefined)
+      if ((event.model || event.sessionTitle || event.contextUsed !== undefined || event.compressionCount !== undefined)
         && this.isActiveRuntimeSession(event.session_id)) {
         this.post({
           type: 'statusBar',
@@ -175,6 +173,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           contextUsed: event.contextUsed,
           contextSize: event.contextSize,
           cachedTokens: event.cachedTokens,
+          compressionCount: event.compressionCount,
         });
       }
       // The local session store already hydrated the visible transcript. ACP

@@ -20,6 +20,7 @@ See the [governance policy](https://github.com/stefanpieter/hermes-vscode/blob/m
 - Hermes profile and model selection
 - ACP permission and edit-approval controls
 - Tool calls, reasoning, todos, usage, and context visibility
+- Live Lead/role activity chips with per-agent context usage and compression counts
 - Background-process lifecycle notifications
 - Busy-session follow-up queue with edit and delete controls
 - Image paste, file references, slash commands, and skill selection

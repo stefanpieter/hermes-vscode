@@ -13,6 +13,7 @@ export interface WebviewState {
   isBusy: boolean;
   knownContextSize: number;
   currentContextUsed?: number;
+  currentCompressionCount?: number;
   agentActivities: AgentActivity[];
   availableCommands: AvailableSlashCommand[];
 
