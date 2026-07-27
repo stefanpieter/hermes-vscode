@@ -27,6 +27,14 @@ export class BackgroundMessageAccumulator {
     if (current.text) this.emit(sessionId, current.text);
   }
 
+  /** Flush every pending completion that triggered one session continuation. */
+  flushSession(sessionId: string): void {
+    const prefix = `${sessionId}\u0000`;
+    for (const key of [...this.pending.keys()]) {
+      if (key.startsWith(prefix)) this.flush(key);
+    }
+  }
+
   dispose(): void {
     for (const key of [...this.pending.keys()]) this.flush(key);
   }

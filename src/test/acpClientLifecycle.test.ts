@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
+import { SessionManager } from '../sessionManager';
 
 class FakeStream extends EventEmitter {
   setEncoding(_encoding: BufferEncoding): this {
@@ -14,11 +15,14 @@ class FakeChildProcess extends EventEmitter {
   readonly writes: Array<Record<string, unknown>> = [];
   readonly stdin = {
     write: (message: string) => {
-      const request = JSON.parse(message.trim()) as { id: number; method?: string };
+      const request = JSON.parse(message.trim()) as { id: number; method?: string; params?: unknown };
       this.writes.push(request);
       if (request.method) {
         setTimeout(() => {
-          this.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} })}\n`);
+          const result = request.method === 'session/new'
+            ? { sessionId: 'persisted-session' }
+            : {};
+          this.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`);
         }, this.responseDelayMs);
       }
       return true;
@@ -191,6 +195,58 @@ test('current process cleanup finishes before an error listener starts its repla
     await restart;
     assert.equal(client.running, true);
     assert.equal(spawned.length, 2);
+
+    client.stop();
+  } finally {
+    Object.defineProperty(childProcess, 'spawn', {
+      configurable: true,
+      value: originalSpawn,
+    });
+  }
+});
+
+test('a replacement ACP child rebinds the owned session before the next prompt', async () => {
+  const childProcess = require('node:child_process') as typeof import('node:child_process');
+  const originalSpawn = childProcess.spawn;
+  const spawned: FakeChildProcess[] = [];
+
+  Object.defineProperty(childProcess, 'spawn', {
+    configurable: true,
+    value: () => {
+      const process = new FakeChildProcess(0);
+      spawned.push(process);
+      return process;
+    },
+  });
+
+  try {
+    const { AcpClient } = await import('../acpClient');
+    const client = new AcpClient('/fake/hermes');
+    const session = new SessionManager(client);
+
+    await client.start();
+    await session.sendPrompt('establish ownership', '/workspace');
+    assert.equal(session.getSessionId(), 'persisted-session');
+
+    spawned[0].emit('exit', 7);
+    await client.start();
+    await session.sendPrompt('continue after reconnect', '/workspace');
+
+    assert.deepEqual(
+      spawned[1].writes.map(request => request.method),
+      ['initialize', 'session/load', 'session/set_mode', 'session/prompt'],
+      'the replacement child must load or create the session before receiving a prompt',
+    );
+    assert.deepEqual(spawned[1].writes[1].params, {
+      sessionId: 'persisted-session',
+      cwd: '/workspace',
+      mcpServers: [],
+    });
+    assert.equal(
+      (spawned[1].writes[3].params as { sessionId: string }).sessionId,
+      'persisted-session',
+      'the prompt must target the session rebound on the replacement child',
+    );
 
     client.stop();
   } finally {

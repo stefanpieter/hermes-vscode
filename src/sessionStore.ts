@@ -106,6 +106,18 @@ export class SessionStore {
     return true;
   }
 
+  addTurnMessagesByAcpSessionId(acpSessionId: string, tools: StoredMessage[], agentText: string): boolean {
+    const session = this.sessions.find(item => item.acpSessionId === acpSessionId);
+    if (!session) return false;
+    for (const tool of tools) session.messages.push(tool);
+    if (agentText.trim()) session.messages.push({ role: 'agent', text: agentText });
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
+      session.messages = session.messages.slice(-MAX_MESSAGES_PER_SESSION);
+    }
+    this.persist();
+    return true;
+  }
+
   addTurnMessages(tools: StoredMessage[], agentText: string): void {
     const s = this.active();
     if (!s) return;

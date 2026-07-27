@@ -4,12 +4,17 @@
  */
 
 import type { QueuedWebviewMessage } from '../webviewQueue';
+import type { AgentActivity } from '../agentActivity';
+import type { AvailableSlashCommand } from '../slashCommands';
 
 export interface WebviewState {
   currentModel: string;
   currentActiveSessionId: string;
   isBusy: boolean;
   knownContextSize: number;
+  currentContextUsed?: number;
+  agentActivities: AgentActivity[];
+  availableCommands: AvailableSlashCommand[];
 
   // Streaming state
   currentAgentEl: HTMLElement | null;
@@ -26,6 +31,7 @@ export interface WebviewState {
   // Queue
   queueHydrated: boolean;
   pendingQueuedMessages: QueuedWebviewMessage[];
+  editingQueuedRequestId?: string;
   prevQueueCount: number;
 
   // Profiles
@@ -43,6 +49,8 @@ export function createInitialState(): WebviewState {
     currentActiveSessionId: '',
     isBusy: false,
     knownContextSize: 0,
+    agentActivities: [],
+    availableCommands: [],
     currentAgentEl: null,
     currentAgentText: '',
     thinkingStatusEl: null,

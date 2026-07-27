@@ -5,6 +5,9 @@
 
 import type { SkillGroup } from './skillCatalog';
 import type { ProfileMenuItem } from './profileUi';
+import type { QueuedWebviewMessage } from './webviewQueue';
+import type { AgentActivity } from './agentActivity';
+import type { AvailableSlashCommand } from './slashCommands';
 
 // ── Session & History ────────────────────────────────
 
@@ -49,11 +52,20 @@ export interface BackgroundProcessState {
   exitCode?: number;
 }
 
+export interface AutonomousTurnState {
+  id: string;
+  status: 'running' | 'completed' | 'failed';
+  trigger: 'background_notification';
+}
+
 export interface SessionUpdateEvent {
   session_id: string;
   text?: string;
+  replay?: boolean;
   background?: boolean;
   backgroundProcess?: BackgroundProcessState;
+  autonomousTurn?: AutonomousTurnState;
+  autonomousTurnId?: string;
   thinkingText?: string;
   toolTitle?: string;
   toolStatus?: string;
@@ -69,6 +81,8 @@ export interface SessionUpdateEvent {
   contextUsed?: number;
   contextSize?: number;
   cachedTokens?: number;
+  availableCommands?: AvailableSlashCommand[];
+  agentActivities?: AgentActivity[];
 }
 
 export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
@@ -78,7 +92,7 @@ export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
 export interface ToWebview {
   type:
     | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
-    | 'error' | 'status' | 'clear' | 'busy' | 'queueState'
+    | 'error' | 'status' | 'notice' | 'clear' | 'busy' | 'queueState'
     | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
   text?: string;
   toolName?: string;
@@ -92,6 +106,7 @@ export interface ToWebview {
   status?: string;
   active?: boolean;
   queued?: number;
+  queuedItems?: QueuedWebviewMessage[];
   startedText?: string;
   startedSlashCommand?: boolean;
   startedRequestId?: string;
@@ -114,15 +129,17 @@ export interface ToWebview {
   profiles?: string[];
   profileItems?: ProfileMenuItem[];
   restartRequired?: boolean;
+  availableCommands?: AvailableSlashCommand[];
+  agentActivities?: AgentActivity[];
 }
 
 export interface FromWebview {
   type:
-    | 'ready' | 'send' | 'switchModel' | 'cancel'
+    | 'ready' | 'send' | 'editQueuedMessage' | 'deleteQueuedMessage' | 'switchModel' | 'cancel'
     | 'newSession' | 'switchSession'
     | 'attachFile' | 'pasteImage' | 'dropFiles' | 'clearAttachments'
     | 'toggleSkill' | 'renameSession' | 'deleteSession'
-    | 'selectProfile' | 'customProfile' | 'restartHermes';
+    | 'selectProfile' | 'customProfile' | 'restartHermes' | 'requestCommands';
   text?: string;
   requestId?: string;
   sessionId?: string;

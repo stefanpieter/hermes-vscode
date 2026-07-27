@@ -13,6 +13,11 @@ const vscodeWindow = {
   activeTextEditor: undefined as unknown,
   tabGroups: { all: [] },
   showInputBox: async (): Promise<string | undefined> => undefined,
+  showWarningMessage: async (
+    _message: string,
+    _options?: unknown,
+    ..._items: string[]
+  ): Promise<string | undefined> => undefined,
 };
 const originalLoad = moduleLoader._load;
 moduleLoader._load = function loadWithVscodeStub(
@@ -50,6 +55,7 @@ class BindingRaceClient {
   incomingRequestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   sessionNewResolve: (() => void) | null = null;
   sessionLoadResolve: (() => void) | null = null;
+  holdSessionNew = true;
   calls: Array<{ method: string; params: unknown }> = [];
   notifications: Array<{ method: string; params: unknown }> = [];
 
@@ -64,7 +70,9 @@ class BindingRaceClient {
   async call(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params });
     if (method === 'session/new') {
-      await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
+      if (this.holdSessionNew) {
+        await new Promise<void>(resolve => { this.sessionNewResolve = resolve; });
+      }
       return { sessionId: 'binding-session' };
     }
     if (method === 'session/load') {
@@ -195,6 +203,135 @@ test('Stop during stored-session loading cancels that turn before queued work st
   }
 });
 
+test('reconnects ACP before starting a prompt after the client has stopped', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-prompt-reconnect-'));
+  const state = new Map<string, unknown>();
+  const events: string[] = [];
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const session = {
+    getSessionId: (): string => 'acp-session',
+    sendPrompt: async (
+      _text: string,
+      _cwd: string,
+      onSessionBound?: (sessionId: string) => void,
+      beforeSessionBinding?: () => Promise<void>,
+    ): Promise<void> => {
+      events.push('owned');
+      await beforeSessionBinding?.();
+      onSessionBound?.('acp-session');
+      events.push('prompt');
+    },
+  };
+  const profileController = {
+    currentProfile: (): string => '',
+    profileItems: (): [] => [],
+    restartRequired: (): boolean => false,
+    selectProfile: async (): Promise<boolean> => false,
+    customProfile: async (): Promise<boolean> => false,
+    restartHermes: async (): Promise<void> => undefined,
+    ensureConnected: async (): Promise<void> => { events.push('connect'); },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+      () => {},
+      profileController,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Resume safely', requestId: 'reconnect' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(events, ['owned', 'connect', 'prompt']);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('Stop while reconnect is pending prevents that prompt from starting', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-reconnect-cancel-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const client = new BindingRaceClient();
+  const session = new SessionManager(client as never);
+  let announceReconnect: () => void = () => {};
+  let releaseReconnect: () => void = () => {};
+  const reconnectStarted = new Promise<void>(resolve => { announceReconnect = resolve; });
+  const profileController = {
+    currentProfile: (): string => '',
+    profileItems: (): [] => [],
+    restartRequired: (): boolean => false,
+    selectProfile: async (): Promise<boolean> => false,
+    customProfile: async (): Promise<boolean> => false,
+    restartHermes: async (): Promise<void> => undefined,
+    ensureConnected: async (): Promise<void> => {
+      announceReconnect();
+      await new Promise<void>(resolve => { releaseReconnect = resolve; });
+    },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session,
+      'test-model',
+      'test-version',
+      context as never,
+      () => {},
+      profileController,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Do not start', requestId: 'cancel-reconnect' });
+    await reconnectStarted;
+    await subject.handleFromWebview({ type: 'cancel' });
+    releaseReconnect();
+    await new Promise(resolve => setImmediate(resolve));
+    client.sessionNewResolve?.();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(
+      client.calls.some(call => call.method === 'session/prompt'),
+      false,
+      'a stopped reconnecting turn must not reach session/prompt after reconnect resolves',
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test('queues a follow-up submitted while busy without cancelling the active prompt', async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-busy-queue-'));
   let cancelCalls = 0;
@@ -214,6 +351,7 @@ test('queues a follow-up submitted while busy without cancelling the active prom
   const session = {
     cancel: async (): Promise<void> => { cancelCalls += 1; },
     ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
     sendPrompt: async (text: string): Promise<void> => {
       prompts.push(text);
       activePromptCalls += 1;
@@ -262,6 +400,21 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     await subject.handleFromWebview({ type: 'send', text: 'Start the long task', requestId: 'active-1' });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(prompts, ['Start the long task']);
+    assert.deepEqual(posted.find(message => message.startedRequestId === 'active-1'), {
+      type: 'busy',
+      active: true,
+      queued: 0,
+      queuedItems: [],
+      startedText: 'Start the long task',
+      startedSlashCommand: false,
+      startedRequestId: 'active-1',
+    }, 'the host must authoritatively confirm even an immediately started composer request');
+
+    await subject.handleFromWebview({ type: 'newSession' });
+    assert.deepEqual(posted.at(-1), {
+      type: 'notice',
+      text: 'Stop or finish the active Hermes turn before changing sessions or profiles.',
+    }, 'session lifecycle changes must not rebind while a prompt owns the active session');
 
     vscodeWindow.activeTextEditor = {
       document: { uri: { fsPath: '/workspace/first.ts' } },
@@ -308,12 +461,42 @@ test('queues a follow-up submitted while busy without cancelling the active prom
     ]);
     assert.deepEqual(subject.attachedFiles, []);
     assert.deepEqual(subject.selectedSkills, []);
-    assert.deepEqual(posted.at(-1), { type: 'busy', active: true, queued: 2 });
+    assert.deepEqual(posted.at(-1), {
+      type: 'busy',
+      active: true,
+      queued: 2,
+      queuedItems: [
+        { requestId: 'queued-1', text: 'Use the safer approach instead', isSlashCommand: false },
+        { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+      ],
+    });
 
+    const readyMessageStart = posted.length;
     await subject.handleFromWebview({ type: 'ready' });
+    const readyMessages = posted.slice(readyMessageStart);
+    const readyHistoryIndex = readyMessages.findIndex(message => message.type === 'loadHistory');
+    const readyQueueIndex = readyMessages.findIndex(message => message.type === 'queueState');
+    assert.ok(
+      readyHistoryIndex >= 0 && readyQueueIndex > readyHistoryIndex,
+      'history must load before queue hydration enables live start rendering',
+    );
+    assert.equal(
+      readyMessages.at(-1)?.type,
+      'queueState',
+      'runtime hydration must finish before the final ready handshake enables submissions',
+    );
     assert.deepEqual(
       posted.filter(message => message.type === 'queueState').at(-1),
-      { type: 'queueState', active: true, queued: 2, activeSlashCommand: false },
+      {
+        type: 'queueState',
+        active: true,
+        queued: 2,
+        activeSlashCommand: false,
+        queuedItems: [
+          { requestId: 'queued-1', text: 'Use the safer approach instead', isSlashCommand: false },
+          { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+        ],
+      },
       'a recreated webview must inherit the live host queue state',
     );
     assert.deepEqual(
@@ -336,7 +519,26 @@ test('queues a follow-up submitted while busy without cancelling the active prom
       startedText: 'Use the safer approach instead',
       startedSlashCommand: false,
       startedRequestId: 'queued-1',
+      queuedItems: [
+        { requestId: 'queued-2', text: 'Then verify the result', isSlashCommand: false },
+      ],
     });
+    assert.equal(
+      posted.filter(message => message.startedRequestId === 'queued-1').length,
+      1,
+      'handoff must emit exactly one authoritative start confirmation',
+    );
+    const queuedStartIndex = posted.findIndex(message => message.startedRequestId === 'queued-1');
+    const queuedAnnotationIndex = posted.findIndex((message, index) =>
+      index > queuedStartIndex
+      && message.type === 'statusBar'
+      && typeof message.contextAnnotation === 'string'
+      && message.contextAnnotation.includes('first.md'),
+    );
+    assert.ok(
+      queuedAnnotationIndex > queuedStartIndex,
+      'context annotation must follow the start acknowledgement that renders its user bubble',
+    );
     assert.deepEqual(
       prompts.map(prompt => prompt.includes('Use the safer approach instead')
         ? 'first queued'
@@ -402,6 +604,7 @@ test('queues model changes and keeps local title changes out of ACP while busy',
   const session = {
     cancel: async (): Promise<void> => { cancelCalls += 1; },
     ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
     sendPrompt: async (text: string): Promise<void> => {
       prompts.push(text);
       activePromptCalls += 1;
@@ -473,11 +676,292 @@ test('queues model changes and keeps local title changes out of ACP while busy',
     await subject.handleFromWebview({ type: 'ready' });
     assert.deepEqual(
       posted.filter(message => message.type === 'queueState').at(-1),
-      { type: 'queueState', active: true, queued: 0, activeSlashCommand: true },
+      { type: 'queueState', active: true, queued: 0, activeSlashCommand: true, queuedItems: [] },
       'a recreated webview must preserve the active slash-response styling',
     );
     promptResolvers.shift()?.();
     await new Promise(resolve => setImmediate(resolve));
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('edits and deletes composer-owned queue entries before handoff', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-queue-mutations-'));
+  const prompts: string[] = [];
+  const promptResolvers: Array<() => void> = [];
+  const posted: Array<Record<string, unknown>> = [];
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const session = {
+    cancel: async (): Promise<void> => undefined,
+    ensureSession: async (): Promise<string> => 'acp-session',
+    getSessionId: (): string => 'acp-session',
+    sendPrompt: async (text: string): Promise<void> => {
+      prompts.push(text);
+      await new Promise<void>(resolve => { promptResolvers.push(resolve); });
+    },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    vscodeWindow.showWarningMessage = async () => undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      messageQueue: Array<{
+        text: string;
+        requestId?: string;
+        isSlashCommand: boolean;
+        attachedFiles: Array<{ name: string; path: string }>;
+        selectedSkills: string[];
+        ideContext: string;
+      }>;
+      attachedFiles: Array<{ name: string; path: string }>;
+      selectedSkills: string[];
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = message => { posted.push(message); };
+
+    await subject.handleFromWebview({ type: 'send', text: 'Active task', requestId: 'active' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    vscodeWindow.activeTextEditor = {
+      document: { uri: { fsPath: '/workspace/original.ts' } },
+      selection: { isEmpty: true },
+    };
+    subject.attachedFiles = [{ name: 'context.md', path: '/context/context.md' }];
+    subject.selectedSkills = ['queue-skill'];
+    await subject.handleFromWebview({ type: 'send', text: 'Original queued text', requestId: 'queued-1' });
+    await subject.handleFromWebview({ type: 'send', text: 'Delete this queued text', requestId: 'queued-2' });
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: 'Revised queued text',
+    });
+    assert.equal(subject.messageQueue[0].text, 'Revised queued text');
+    assert.deepEqual(subject.messageQueue[0].attachedFiles, [
+      { name: 'context.md', path: '/context/context.md' },
+    ], 'a prose edit must retain the context captured when it was submitted');
+    assert.deepEqual(subject.messageQueue[0].selectedSkills, ['queue-skill']);
+    assert.equal(subject.messageQueue[0].ideContext, '[Active file: /workspace/original.ts]\n\n');
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: '/queue revised instruction',
+    });
+    assert.equal(subject.messageQueue[0].isSlashCommand, true);
+    assert.deepEqual(subject.messageQueue[0].attachedFiles, []);
+    assert.deepEqual(subject.messageQueue[0].selectedSkills, []);
+    assert.equal(subject.messageQueue[0].ideContext, '');
+
+    await subject.handleFromWebview({
+      type: 'editQueuedMessage', requestId: 'queued-1', text: '   ',
+    });
+    assert.equal(subject.messageQueue[0].text, '/queue revised instruction', 'an empty edit must be ignored');
+
+    await subject.handleFromWebview({ type: 'deleteQueuedMessage', requestId: 'queued-2' });
+    assert.deepEqual(
+      subject.messageQueue.map(item => item.requestId),
+      ['queued-1', 'queued-2'],
+      'dismissing the supported VS Code confirmation must retain the queued message',
+    );
+
+    vscodeWindow.showWarningMessage = async () => 'Delete';
+    await subject.handleFromWebview({ type: 'deleteQueuedMessage', requestId: 'queued-2' });
+    assert.deepEqual(subject.messageQueue.map(item => item.requestId), ['queued-1']);
+    assert.deepEqual(posted.filter(message => message.type === 'queueState').at(-1), {
+      type: 'queueState',
+      active: true,
+      queued: 1,
+      activeSlashCommand: false,
+      queuedItems: [
+        { requestId: 'queued-1', text: '/queue revised instruction', isSlashCommand: true },
+      ],
+    });
+
+    promptResolvers.shift()?.();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(prompts, ['Active task', '/queue revised instruction']);
+    assert.ok(posted.some(message =>
+      message.type === 'busy'
+      && message.startedRequestId === 'queued-1'
+      && message.startedText === '/queue revised instruction'
+      && message.startedSlashCommand === true
+    ));
+    promptResolvers.shift()?.();
+    await new Promise(resolve => setImmediate(resolve));
+  } finally {
+    vscodeWindow.showWarningMessage = async () => undefined;
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('keeps the composer busy and persists one continuous autonomous Lead turn', () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-autonomous-turn-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const posted: Array<Record<string, unknown>> = [];
+  const session = { getSessionId: (): string => 'acp-session' };
+
+  try {
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      busy: boolean;
+      autonomousTurnId?: string;
+      lastTurnText: string;
+      backgroundMessages: { push(sessionId: string, text: string, id: string): void };
+      store: {
+        ensureSession(): void;
+        setAcpSessionId(id: string): void;
+        active(): { messages: Array<{ role: string; text: string }> } | undefined;
+      };
+      post(message: Record<string, unknown>): void;
+      handleAutonomousTurn(event: Record<string, unknown>): void;
+    };
+    subject.store.ensureSession();
+    subject.store.setAcpSessionId('acp-session');
+    subject.post = message => { posted.push(message); };
+    subject.handleAutonomousTurn({
+      session_id: 'other-session',
+      autonomousTurn: { id: 'proc_other', status: 'running', trigger: 'background_notification' },
+    });
+    assert.equal(subject.busy, false, 'inactive ACP sessions must not seize the active composer');
+    assert.equal(subject.autonomousTurnId, undefined);
+    subject.backgroundMessages.push(
+      'acp-session', '[Background process proc_tv completed]', 'proc_tv',
+    );
+
+    subject.handleAutonomousTurn({
+      session_id: 'acp-session',
+      autonomousTurn: { id: 'proc_tv', status: 'running', trigger: 'background_notification' },
+    });
+    assert.equal(subject.busy, true);
+    assert.equal(subject.autonomousTurnId, 'proc_tv');
+    assert.equal(subject.store.active()?.messages.at(-1)?.role, 'agent');
+    assert.equal(subject.store.active()?.messages.at(-1)?.text,
+      '[Background process proc_tv completed]');
+    assert.equal(posted.at(-1)?.type, 'busy');
+    assert.equal(posted.at(-1)?.active, true);
+
+    subject.lastTurnText = 'The Technical Validator passed; continuing implementation.';
+    subject.handleAutonomousTurn({
+      session_id: 'acp-session',
+      autonomousTurn: { id: 'proc_tv', status: 'completed', trigger: 'background_notification' },
+    });
+
+    assert.equal(subject.busy, false);
+    assert.equal(subject.autonomousTurnId, undefined);
+    assert.equal(subject.store.active()?.messages.at(-1)?.text,
+      'The Technical Validator passed; continuing implementation.');
+    assert.deepEqual(posted.slice(-2), [
+      { type: 'done' },
+      { type: 'busy', active: false, queued: 0, queuedItems: [] },
+    ]);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('persists an inactive session autonomous Lead response without seizing the visible composer', () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-inactive-autonomous-turn-'));
+  const state = new Map<string, unknown>();
+  state.set('hermes.sessions', [
+    {
+      id: 'old-chat', title: 'Old Lead chat', createdAt: 1, messages: [],
+      acpSessionId: 'old-acp-session',
+    },
+    {
+      id: 'visible-chat', title: 'Visible chat', createdAt: 2, messages: [],
+      acpSessionId: 'visible-acp-session',
+    },
+  ]);
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const posted: Array<Record<string, unknown>> = [];
+  const session = { getSessionId: (): string => 'visible-acp-session' };
+
+  try {
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      busy: boolean;
+      post(message: Record<string, unknown>): void;
+      captureAutonomousEvent(event: Record<string, unknown>): boolean;
+      handleAutonomousTurn(event: Record<string, unknown>): void;
+      store: {
+        allSessions(): Array<{ id: string; messages: Array<{ role: string; text: string }> }>;
+      };
+    };
+    subject.post = message => { posted.push(message); };
+
+    subject.handleAutonomousTurn({
+      session_id: 'old-acp-session',
+      autonomousTurn: {
+        id: 'old-turn', status: 'running', trigger: 'background_notification',
+      },
+    });
+    assert.equal(subject.captureAutonomousEvent({
+      session_id: 'old-acp-session',
+      autonomousTurnId: 'old-turn',
+      text: 'The old Lead consumed the role result and completed its next step.',
+    }), true, 'inactive output must be consumed without rendering in the visible chat');
+    assert.equal(subject.captureAutonomousEvent({
+      session_id: 'old-acp-session',
+      autonomousTurnId: 'old-turn',
+      toolTitle: 'write_file',
+      toolStatus: 'completed',
+      toolDetail: 'saved old-chat output',
+    }), true, 'inactive tool updates must stay on the owning hidden chat');
+    subject.handleAutonomousTurn({
+      session_id: 'old-acp-session',
+      autonomousTurn: {
+        id: 'old-turn', status: 'completed', trigger: 'background_notification',
+      },
+    });
+
+    const oldChat = subject.store.allSessions().find(chat => chat.id === 'old-chat');
+    const visibleChat = subject.store.allSessions().find(chat => chat.id === 'visible-chat');
+    assert.equal(oldChat?.messages.at(-2)?.text, '✓ write_file: saved old-chat output');
+    assert.equal(oldChat?.messages.at(-1)?.text,
+      'The old Lead consumed the role result and completed its next step.');
+    assert.deepEqual(visibleChat?.messages, []);
+    assert.equal(subject.busy, false);
+    assert.equal(posted.some(message => message.type === 'busy' || message.type === 'done'), false);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }

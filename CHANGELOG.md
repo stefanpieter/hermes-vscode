@@ -2,9 +2,75 @@
 
 ## A note on versioning
 
-The `v1.x` and `v2.x` majors were premature — milestones in the author's head, not real semver breaking changes. From `v3.0.0` onward, proper semver applies.
+The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` onward, releases follow semantic versioning.
 
 ---
+
+## [Unreleased]
+
+### Maintenance
+
+- Added transparent maintained-fork governance, contribution, security, release, and migration policies while the upstream repository and Marketplace handover is discussed.
+- Added cross-platform CI for type checking, secret scanning, regression tests, production builds, dependency security auditing, and deterministic VSIX package inspection without publicly uploading an unauthorised publisher artefact.
+- Made background-test discovery independent of shell glob expansion so the suite runs consistently on Linux, macOS, and Windows CI; branch pushes now run separately only for `main` to avoid duplicate pull-request jobs.
+- Added a single `npm run verify` release gate and removed generated profile test output after successful runs.
+- Updated DOMPurify and the VSIX packaging toolchain to eliminate known dependency advisories from the locked build.
+- Added an isolated lockfile audit that forces an online query to the official npm registry, ignores external npm offline/omit/production/registry settings, verifies npm's reported dependency population against `package-lock.json`, validates vulnerability-metadata structure and consistency, and fails on advisories at every severity across production, development, optional, and peer dependencies; behavioural tests cover hostile configuration and fail-closed process, output, and cleanup handling.
+- Removed private machine assumptions and stale Hermes Agent links from contributor documentation.
+
+### Security
+
+- Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
+- Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
+
+## [3.4.3] — 2026-07-27
+
+### Fixed
+
+- Composer sends now verify and, when necessary, restart the ACP client inside the prompt's cancellation boundary, preventing a long-lived window from failing with `ACP client not started` after its child process exits.
+- Replacement ACP children now explicitly reload the persisted session before prompting, and Stop during reconnect prevents that delayed prompt from starting.
+
+## [3.4.2] — 2026-07-27
+
+### Fixed
+
+- Queued-message Delete now uses VS Code's supported Extension Host confirmation UI instead of a browser `confirm()` call that sandboxed webviews can suppress; cancelling retains the row, while confirming deletes only the matching stable request ID and republishes authoritative queue state.
+
+## [3.4.1] — 2026-07-26
+
+### Changed
+
+- The composer now keeps pulsing while an authoritative standalone role is `starting` or `running`, so a Lead waiting for delegated work does not appear to have stopped; this visual signal does not mark the ACP turn busy or disable input.
+
+## [3.4.0] — 2026-07-25
+
+### Added
+
+- Added an agent-activity strip showing the primary Hermes lifecycle and exact context usage, plus repository-scoped standalone role names and statuses from authoritative Hermes role-run manifests.
+- Added optional per-role context display when the role runtime supplies explicit `context_used` and `context_size` values; unavailable metrics remain visibly unknown rather than estimated.
+
+### Changed
+
+- The slash-command menu and command classification now consume Hermes ACP `available_commands_update` metadata, so additions, edits, and removals propagate without maintaining a second UI list.
+- Corrected the compatibility command catalog from obsolete `/compact` to Hermes `/compress`.
+- Active ACP sessions now hydrate on panel readiness so command metadata is current without waiting for the first prompt; replay metadata is accepted without duplicating the locally restored transcript.
+
+## [3.3.0] — 2026-07-24
+
+### Added
+
+- Queued composer messages now appear above the toolbar with inline Edit and Delete controls while another turn is active.
+- Queue controls use stable request IDs and host-authoritative hydration, so duplicate text and recreated webviews cannot mutate the wrong pending message.
+
+### Changed
+
+- Editing a queued prose message preserves the files, skills, and IDE context captured at submission; changing it into a known slash command safely discards context that slash commands do not accept.
+
+## [3.2.13] — 2026-07-23
+
+### Fixed
+
+- Reopening or recreating the chat webview now restores the active session's persistent background-work indicator, so a running supervised Lead/worker remains visibly pulsing after the panel's ready handshake.
 
 ## [3.2.12] — 2026-07-22
 

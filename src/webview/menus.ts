@@ -7,6 +7,10 @@ import type { FromWebview } from '../types';
 import type { ProfileMenuItem } from '../profileUi';
 import type { WebviewState } from './state';
 import { fmtAge, fmtTok } from './renderers';
+import { mergeAgentActivities } from '../agentActivity';
+import { slashCommandPresentation } from '../slashCommands';
+import type { AgentActivity } from '../agentActivity';
+import type { AvailableSlashCommand } from '../slashCommands';
 
 type Vscode = { postMessage(msg: FromWebview): void };
 
@@ -173,6 +177,81 @@ export function setupSkillsHandlers(
   });
 }
 
+// ── Dynamic slash-command menu ───────────────────────
+
+function escapeMarkup(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export function buildSlashCommandMenu(
+  container: HTMLElement,
+  commands: readonly AvailableSlashCommand[],
+): void {
+  if (commands.length === 0) {
+    container.innerHTML = '<div class="menu-item menu-placeholder">No commands advertised by this session.</div>';
+    return;
+  }
+
+  const rows = commands.map(command => {
+    const presentation = slashCommandPresentation(command);
+    const danger = command.name === 'reset' ? ' danger' : '';
+    const confirm = presentation.confirmation
+      ? ` data-confirm="${escapeMarkup(presentation.confirmation)}"`
+      : '';
+    const argument = presentation.argumentLabel
+      ? ` data-arg-label="${escapeMarkup(presentation.argumentLabel)}"`
+      : '';
+    return `<div class="menu-item${danger}" data-cmd="${escapeMarkup(presentation.command)}" data-mode="${presentation.mode}"${confirm}${argument}>`
+      + `<span class="cmd-name">${escapeMarkup(presentation.command)}</span> ${escapeMarkup(command.description)}`
+      + '</div>';
+  }).join('');
+  container.innerHTML = DOMPurify.sanitize(`<div class="menu-group-label">Available commands</div>${rows}`);
+}
+
+// ── Agent activity bar ───────────────────────────────
+
+export function renderAgentActivityBar(
+  container: HTMLElement,
+  primary: AgentActivity,
+  explicitActivities: readonly AgentActivity[],
+): void {
+  container.replaceChildren();
+  for (const activity of mergeAgentActivities(primary, explicitActivities)) {
+    const chip = document.createElement('div');
+    chip.className = `agent-chip ${activity.status}`;
+    chip.dataset.agentId = activity.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'agent-dot';
+    const name = document.createElement('span');
+    name.className = 'agent-name';
+    name.textContent = activity.name;
+    const status = document.createElement('span');
+    status.className = 'agent-status';
+    status.textContent = activity.status;
+    chip.append(dot, name, status);
+
+    if (activity.contextUsed !== undefined) {
+      const context = document.createElement('span');
+      context.className = 'agent-context';
+      context.textContent = activity.contextSize
+        ? `${fmtTok(activity.contextUsed)}/${fmtTok(activity.contextSize)}`
+        : `${fmtTok(activity.contextUsed)} tok`;
+      chip.append(context);
+    }
+    chip.title = `${activity.name} · ${activity.status}`
+      + (activity.contextUsed !== undefined
+        ? ` · context ${activity.contextUsed.toLocaleString()}${activity.contextSize ? ` / ${activity.contextSize.toLocaleString()}` : ''}`
+        : ' · context unavailable');
+    container.append(chip);
+  }
+}
+
 // ── Token display formatting ─────────────────────────
 //
 // TODO(joao): choose the display hierarchy. See the block in updateStatusBar()
@@ -226,12 +305,14 @@ export function updateStatusBar(
     // Model changed — reset cached context size so the old model's window
     // doesn't persist until the first response from the new model arrives.
     state.knownContextSize = 0;
+    state.currentContextUsed = undefined;
     els.statusContextEl.textContent = '';
     els.ctxBarWrap.style.display = 'none';
   }
   if (sessionTitle) els.statusSessionEl.textContent = sessionTitle;
   if (contextSize && contextSize > 0) state.knownContextSize = contextSize;
   if (contextUsed !== undefined) {
+    state.currentContextUsed = contextUsed;
     const size = state.knownContextSize;
     if (size > 0) {
       const freshTokens = Math.max(0, contextUsed - (cachedTokens ?? 0));

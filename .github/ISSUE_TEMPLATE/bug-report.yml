@@ -1,0 +1,61 @@
+name: Bug report
+description: Report reproducible incorrect behaviour in the maintained extension
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here. Use the private process in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Extension version and source
+      description: Include the version and whether it came from Marketplace, GitHub release, or a local VSIX.
+    validations:
+      required: true
+  - type: input
+    id: hermes
+    attributes:
+      label: Hermes Agent version
+      description: Output of `hermes version` or the exact commit, with secrets removed.
+    validations:
+      required: true
+  - type: input
+    id: vscode
+    attributes:
+      label: VS Code and operating system
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest deterministic sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour and evidence
+      description: Include sanitised logs if useful. Never include tokens, credentials, private state databases, or confidential source.
+    validations:
+      required: true
+  - type: dropdown
+    id: lifecycle
+    attributes:
+      label: Does this involve active/background work or session switching?
+      options:
+        - "No"
+        - "Foreground prompt"
+        - "Background process"
+        - "Session switch or webview recreation"
+        - "Unsure"
+    validations:
+      required: true

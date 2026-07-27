@@ -10,10 +10,13 @@ import { createInitialState } from './state';
 import {
   acknowledgeStartedQueuedMessage,
   createComposerRequestId,
+  editQueuedMessage,
   hydrateWebviewQueueState,
   registerSubmittedWebviewMessage,
 } from '../webviewQueue';
 import { isKnownSlashCommand } from '../slashCommands';
+import { primaryAgentActivity, shouldPulseComposer } from '../agentActivity';
+import { renderQueuedMessagesMarkup } from './queueControls';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
   formatToolDisplay, renderTodoOverlay, detectTodoUpdate,
@@ -23,6 +26,7 @@ import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
   buildProfileMenu, setupProfileHandlers,
   buildSkillsMenu, setupSkillsHandlers, updateStatusBar,
+  buildSlashCommandMenu, renderAgentActivityBar,
 } from './menus';
 
 declare function acquireVsCodeApi(): { postMessage(msg: FromWebview): void };
@@ -42,6 +46,7 @@ const busyBtns         = document.getElementById('busy-btns') as HTMLDivElement;
 const stopBtn          = document.getElementById('stop-btn') as HTMLButtonElement;
 const queueBtn         = document.getElementById('queue-btn') as HTMLButtonElement;
 const queueStatus      = document.getElementById('queue-status') as HTMLDivElement;
+const queueItems       = document.getElementById('queue-items') as HTMLDivElement;
 const dragHandle       = document.getElementById('input-drag') as HTMLDivElement;
 const inputRow         = document.getElementById('input-row') as HTMLDivElement;
 const composer         = document.getElementById('composer') as HTMLDivElement;
@@ -68,6 +73,7 @@ const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElemen
 const cmdArgPopover    = document.getElementById('cmd-arg-popover') as HTMLDivElement;
 const cmdArgInput      = document.getElementById('cmd-arg-input') as HTMLInputElement;
 const cmdArgLabel      = document.getElementById('cmd-arg-label') as HTMLElement;
+const agentActivityBar = document.getElementById('agent-activity-bar') as HTMLDivElement;
 
 // The host owns the live queue across webview disposal. Keep submission controls
 // unavailable until the ready handshake restores that runtime state.
@@ -79,11 +85,20 @@ const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profil
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
+function renderAgentBar(): void {
+  renderAgentActivityBar(
+    agentActivityBar,
+    primaryAgentActivity(S.isBusy, S.currentContextUsed, S.knownContextSize || undefined),
+    S.agentActivities,
+  );
+  composer.classList.toggle('busy-glow', shouldPulseComposer(S.isBusy, S.agentActivities));
+}
+
 // ── Helpers ──────────────────────────────────────────
 function setBusy(active: boolean, queued = 0): void {
   S.isBusy = active;
+  renderAgentBar();
   logoMark.classList.toggle('busy', active);
-  composer.classList.toggle('busy-glow', active);
   sendBtn.style.display = active ? 'none' : 'block';
   busyBtns.style.display = active ? 'flex' : 'none';
   if (queued > 0) {
@@ -93,7 +108,21 @@ function setBusy(active: boolean, queued = 0): void {
     queueStatus.style.display = 'none';
     queueStatus.textContent = '';
   }
+  renderQueuedMessages();
   requestAnimationFrame(syncComposerHeight);
+}
+
+function renderQueuedMessages(): void {
+  queueItems.innerHTML = DOMPurify.sanitize(renderQueuedMessagesMarkup(
+    S.pendingQueuedMessages,
+    S.editingQueuedRequestId,
+  ));
+  queueItems.style.display = S.pendingQueuedMessages.length > 0 ? 'flex' : 'none';
+  if (S.editingQueuedRequestId) {
+    const editor = queueItems.querySelector<HTMLTextAreaElement>('.queued-edit-input');
+    editor?.focus();
+    editor?.setSelectionRange(editor.value.length, editor.value.length);
+  }
 }
 
 function syncComposerHeight(): void {
@@ -152,23 +181,18 @@ function send(): void {
   const text = inputEl.value.trim();
   if (!text) return;
   const requestId = createComposerRequestId(() => crypto.randomUUID());
-  const isSlash = isKnownSlashCommand(text);
-  const queued = registerSubmittedWebviewMessage(S, { requestId, text, isSlashCommand: isSlash });
+  const isSlash = isKnownSlashCommand(text, S.availableCommands);
+  registerSubmittedWebviewMessage(S, { requestId, text, isSlashCommand: isSlash });
   inputEl.value = '';
   inputEl.style.height = '';
   attachChip.style.display = 'none'; attachChip.innerHTML = '';
   S.selectedSkillNames.clear();
   skillsBtn.classList.remove('has-skills'); skillsBtn.textContent = '✦';
   if (emptyState) emptyState.style.display = 'none';
-  if (!queued) {
-    // Slash commands don't reach the LLM — don't render a user bubble.
-    // The response from the adapter will be styled as a system bubble on 'done'.
-    if (!isSlash) appendMessage(messagesEl, 'user', text);
-    S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
-    S.pendingSlashResponse = isSlash;
-    if (!isSlash) showWaiting(messagesEl);
-    setBusy(true, 0);
-  }
+  // Rendering waits for the host's started/queued acknowledgement. The local
+  // descriptor remains pending so neither direction of a busy-state race can
+  // create a duplicate bubble or expose the wrong queue item.
+  setBusy(true, S.prevQueueCount);
   vscode.postMessage({ type: 'send', text, requestId });
   requestAnimationFrame(syncComposerHeight);
 }
@@ -249,7 +273,10 @@ overflowBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   const open = overflowMenu.style.display !== 'none';
   closeFn(); hideCmdArg();
-  if (!open) overflowMenu.style.display = 'block';
+  if (!open) {
+    buildSlashCommandMenu(overflowMenu, S.availableCommands);
+    overflowMenu.style.display = 'block';
+  }
 });
 
 overflowMenu.addEventListener('click', (e) => {
@@ -365,6 +392,44 @@ inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
+queueItems.addEventListener('click', (e) => {
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+  const row = button?.closest<HTMLElement>('.queued-item[data-request-id]');
+  const requestId = row?.dataset.requestId;
+  const action = button?.dataset.action;
+  if (!button || !row || !requestId || !action) return;
+
+  if (action === 'edit') {
+    S.editingQueuedRequestId = requestId;
+    renderQueuedMessages();
+    return;
+  }
+  if (action === 'cancel') {
+    S.editingQueuedRequestId = undefined;
+    renderQueuedMessages();
+    return;
+  }
+  if (action === 'delete') {
+    // Native browser confirm() dialogs are blocked by VS Code's sandboxed
+    // webview. Ask the Extension Host to use VS Code's supported modal UI and
+    // wait for its authoritative queueState response before changing the row.
+    vscode.postMessage({ type: 'deleteQueuedMessage', requestId });
+    return;
+  }
+  if (action === 'save') {
+    const editor = row.querySelector<HTMLTextAreaElement>('.queued-edit-input');
+    const text = editor?.value.trim();
+    if (!text) {
+      editor?.focus();
+      return;
+    }
+    editQueuedMessage(S.pendingQueuedMessages, requestId, text, isKnownSlashCommand(text, S.availableCommands));
+    S.editingQueuedRequestId = undefined;
+    renderQueuedMessages();
+    vscode.postMessage({ type: 'editQueuedMessage', requestId, text });
+  }
+});
+
 // Close dropdowns on outside click
 document.addEventListener('click', closeFn);
 
@@ -436,7 +501,9 @@ window.addEventListener('message', (e: MessageEvent) => {
         active,
         queued,
         activeSlashCommand: msg.activeSlashCommand ?? false,
+        queuedItems: msg.queuedItems ?? [],
       });
+      S.editingQueuedRequestId = undefined;
       inputEl.disabled = false;
       sendBtn.disabled = false;
       queueBtn.disabled = false;
@@ -459,6 +526,12 @@ window.addEventListener('message', (e: MessageEvent) => {
           appendMessage(messagesEl, 'user', next.text);
         }
         if (next?.showWaiting) showWaiting(messagesEl);
+      }
+      if (msg.queuedItems !== undefined) {
+        S.pendingQueuedMessages = msg.queuedItems.map(message => ({ ...message }));
+        if (S.editingQueuedRequestId && !S.pendingQueuedMessages.some(
+          message => message.requestId === S.editingQueuedRequestId,
+        )) S.editingQueuedRequestId = undefined;
       }
       S.prevQueueCount = newQueued;
       setBusy(msg.active ?? false, newQueued);
@@ -515,18 +588,37 @@ window.addEventListener('message', (e: MessageEvent) => {
       }
       break;
 
+    case 'notice': {
+      const notice = appendDiv(messagesEl, 'status-line');
+      notice.textContent = msg.text ?? '';
+      autoScroll();
+      break;
+    }
+
     case 'clear':
       messagesEl.innerHTML = '';
       S.pendingQueuedMessages = []; S.prevQueueCount = 0; S.knownContextSize = 0; S.flushScheduled = false;
+      S.currentContextUsed = undefined; S.agentActivities = []; S.availableCommands = [];
+      S.editingQueuedRequestId = undefined;
       ctxBarWrap.style.display = 'none';
       S.currentAgentEl = null; S.currentAgentText = ''; S.thinkingStatusEl = null; S.pendingText = '';
       setBusy(false);
       statusContextEl.textContent = ''; statusContextEl.className = '';
       backgroundProcessStatus.className = ''; backgroundProcessStatus.innerHTML = '';
+      buildSlashCommandMenu(overflowMenu, S.availableCommands);
+      renderAgentBar();
       break;
 
     case 'statusBar': {
       updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
+      if (msg.availableCommands !== undefined) {
+        S.availableCommands = msg.availableCommands.map(command => ({ ...command }));
+        buildSlashCommandMenu(overflowMenu, S.availableCommands);
+      }
+      if (msg.agentActivities !== undefined) {
+        S.agentActivities = msg.agentActivities.map(activity => ({ ...activity }));
+      }
+      renderAgentBar();
       if (msg.skillGroups && msg.skillGroups.length > 0) S.skillGroupsData = msg.skillGroups;
       if (msg.selectedSkills !== undefined) {
         S.selectedSkillNames = new Set(msg.selectedSkills);

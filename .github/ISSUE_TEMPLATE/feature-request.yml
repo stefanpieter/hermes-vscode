@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose an improvement to the maintained Hermes VS Code client
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: Describe the desired user-visible outcome rather than only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: lifecycle
+    attributes:
+      label: ACP, session, security, or migration considerations
+      description: Note any effect on active prompts, background work, permissions, persisted state, or extension identity.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

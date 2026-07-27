@@ -104,6 +104,7 @@ ${CSS_TEMPLATE}
         <span id="status-context"></span>
       </div>
     </div>
+    <div id="agent-activity-bar" aria-label="Hermes agent activity"></div>
     <div id="session-picker" class="status-dropdown" style="display:none"></div>
     <div id="model-menu" style="display:none">
       ${modelMenuHtml}
@@ -133,6 +134,7 @@ ${CSS_TEMPLATE}
     <textarea id="input" rows="2" placeholder="Message Hermes…"></textarea>
   </div>
   <div id="queue-status"></div>
+  <div id="queue-items" role="list" aria-label="Queued messages"></div>
   <div id="bottom-bar">
     <button class="cmd-btn" id="attach-btn" title="Attach file"><span class="btn-icon">⊕</span></button>
     <div class="btn-wrap">
@@ -142,17 +144,7 @@ ${CSS_TEMPLATE}
     <div class="btn-wrap">
       <button class="cmd-btn" id="overflow-btn" title="Slash commands"><span class="btn-icon">/</span></button>
       <div id="overflow-menu" style="display:none">
-      <div class="menu-group-label">Session</div>
-      <div class="menu-item" data-cmd="/compact" data-mode="execute"><span class="cmd-name">/compact</span> Compress context</div>
-
-      <div class="menu-group-label">Info</div>
-      <div class="menu-item" data-cmd="/context" data-mode="execute"><span class="cmd-name">/context</span> Context info</div>
-      <div class="menu-item" data-cmd="/tools" data-mode="execute"><span class="cmd-name">/tools</span> List tools</div>
-      <div class="menu-item" data-cmd="/version" data-mode="execute"><span class="cmd-name">/version</span> Hermes version</div>
-      <div class="menu-item" data-cmd="/help" data-mode="execute"><span class="cmd-name">/help</span> All commands</div>
-
-      <div class="menu-group-label danger-label">Danger</div>
-      <div class="menu-item danger" data-cmd="/reset" data-mode="confirm" data-confirm="Clear the entire conversation history? This cannot be undone."><span class="cmd-name">/reset</span> Reset conversation</div>
+        <div class="menu-item menu-placeholder">Commands load from the active Hermes session.</div>
       </div>
       <div id="cmd-arg-popover" style="display:none">
         <div class="cmd-arg-label" id="cmd-arg-label">Argument</div>
@@ -279,6 +271,29 @@ const CSS_TEMPLATE = /* css */ `
     }
     #status-context.warn { color: var(--gold); opacity: 1; }
     #status-context.crit { color: #C94040; opacity: 1; }
+
+    #agent-activity-bar {
+      display: flex; align-items: center; gap: 5px;
+      padding: 0 8px 5px; overflow-x: auto;
+      scrollbar-width: none; font-family: var(--ui-font);
+    }
+    #agent-activity-bar::-webkit-scrollbar { display: none; }
+    .agent-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      min-width: 0; flex: 0 0 auto; max-width: 220px;
+      padding: 2px 6px;
+      border: 1px solid var(--vscode-sideBarSectionHeader-border, rgba(128,128,128,0.25));
+      border-radius: 999px; color: var(--vscode-descriptionForeground);
+      background: rgba(128,128,128,0.06); font-size: 0.72em;
+    }
+    .agent-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: #888; }
+    .agent-chip.running .agent-dot, .agent-chip.starting .agent-dot { background: var(--gold); box-shadow: 0 0 6px var(--gold-dim); }
+    .agent-chip.completed .agent-dot, .agent-chip.idle .agent-dot { background: var(--vscode-testing-iconPassed, #73c991); }
+    .agent-chip.blocked .agent-dot, .agent-chip.failed .agent-dot { background: var(--vscode-testing-iconFailed, #f14c4c); }
+    .agent-chip.cancelled .agent-dot { background: var(--vscode-disabledForeground, #777); }
+    .agent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-foreground); }
+    .agent-status { opacity: 0.65; text-transform: capitalize; }
+    .agent-context { opacity: 0.8; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
     /* Token progress bar — dual layer: total (faded) + fresh (solid) */
     #ctx-bar-wrap {
@@ -694,7 +709,7 @@ const CSS_TEMPLATE = /* css */ `
       0%, 100% { border-color: rgba(244, 135, 113, 0.45); box-shadow: 0 0 4px rgba(244,135,113,0.15); }
       50%       { border-color: rgba(244, 135, 113, 0.90); box-shadow: 0 0 14px rgba(244,135,113,0.40); }
     }
-    /* Busy glow — applied while the agent is working */
+    /* Active-work glow — applied for an ACP prompt or validated standalone role work. */
     #composer.busy-glow { animation: composer-glow-gold 1.6s ease-in-out infinite; }
     /* YOLO mode — persistent red glow (future /yolo slash command) */
     #composer.yolo { border-color: rgba(244, 135, 113, 0.7); }
@@ -747,6 +762,43 @@ const CSS_TEMPLATE = /* css */ `
       font-family: var(--ui-font); font-size: 0.72em;
       color: var(--gold); opacity: 0.8; padding: 0 8px 2px; display: none;
     }
+    #queue-items {
+      display: none; flex-direction: column; gap: 4px;
+      max-height: 180px; overflow-y: auto; padding: 2px 6px 5px;
+      font-family: var(--ui-font);
+    }
+    .queued-item {
+      display: grid; grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center; gap: 6px; padding: 5px 6px;
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
+      border-radius: 4px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
+    }
+    .queued-item.slash { border-color: var(--gold-border); }
+    .queued-item.editing { display: flex; flex-direction: column; align-items: stretch; }
+    .queued-item-position {
+      color: var(--gold); opacity: 0.8; font-size: 0.72em; text-align: center;
+    }
+    .queued-item-text {
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--vscode-foreground); font-size: 0.78em;
+    }
+    .queued-actions { display: flex; gap: 3px; justify-content: flex-end; }
+    .queued-action {
+      border: 1px solid var(--vscode-button-border, var(--vscode-input-border, rgba(128,128,128,0.3)));
+      border-radius: 3px; padding: 2px 6px; cursor: pointer;
+      color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, transparent);
+      font-family: var(--ui-font); font-size: 0.7em;
+    }
+    .queued-action:hover { border-color: var(--gold-border); color: var(--gold); }
+    .queued-action.primary { background: var(--gold); color: #1e1e1e; border-color: var(--gold); }
+    .queued-action.danger:hover { color: var(--vscode-errorForeground, #f48771); border-color: var(--vscode-errorForeground, #f48771); }
+    .queued-edit-input {
+      width: 100%; min-height: 54px; resize: vertical; padding: 5px 6px;
+      border: 1px solid var(--gold-border); border-radius: 3px;
+      color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+      font-family: inherit; font-size: 0.8em;
+    }
+    .queued-edit-input:focus { outline: 1px solid var(--gold); }
 
     /* ── Bottom toolbar (inside composer, no top border) ── */
     #bottom-bar {

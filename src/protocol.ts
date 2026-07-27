@@ -6,7 +6,7 @@
  * this module owns parsing (extracting fields from wire format).
  */
 
-import type { BackgroundProcessState, SessionUpdateEvent, TodoState } from './types';
+import type { AutonomousTurnState, BackgroundProcessState, SessionUpdateEvent, TodoState } from './types';
 
 type RawUpdate = Record<string, unknown>;
 
@@ -141,6 +141,24 @@ export function parseBackgroundProcessMeta(update: RawUpdate): BackgroundProcess
   if (!/^proc_[A-Za-z0-9]+$/.test(id) || !['running', 'completed', 'failed'].includes(status)) return undefined;
   const exitCode = typeof process.exitCode === 'number' ? process.exitCode : undefined;
   return { id, status: status as BackgroundProcessState['status'], ...(exitCode !== undefined ? { exitCode } : {}) };
+}
+
+/** Parse the lifecycle of a server-initiated continuation turn. */
+export function parseAutonomousTurnMeta(update: RawUpdate): AutonomousTurnState | undefined {
+  const meta = update['_meta'] as Record<string, unknown> | undefined;
+  const hermes = meta?.hermes as Record<string, unknown> | undefined;
+  const turn = hermes?.autonomousTurn as Record<string, unknown> | undefined;
+  if (!turn) return undefined;
+  const id = String(turn.id ?? '').trim();
+  const status = String(turn.status ?? '');
+  const trigger = String(turn.trigger ?? '');
+  if (!id || !['running', 'completed', 'failed'].includes(status)
+    || trigger !== 'background_notification') return undefined;
+  return {
+    id,
+    status: status as AutonomousTurnState['status'],
+    trigger: 'background_notification',
+  };
 }
 
 /** Parse a tool_call_update, checking for todo and process JSON in output. */
