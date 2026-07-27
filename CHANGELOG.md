@@ -23,6 +23,12 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.4.3] — 2026-07-27
+
+### Fixed
+
+- Composer sends now verify and, when necessary, restart the ACP client at the prompt boundary, preventing a long-lived window from failing with `ACP client not started` after its child process exits.
+
 ## [3.4.2] — 2026-07-27
 
 ### Fixed

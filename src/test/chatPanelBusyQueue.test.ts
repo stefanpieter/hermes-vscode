@@ -200,6 +200,66 @@ test('Stop during stored-session loading cancels that turn before queued work st
   }
 });
 
+test('reconnects ACP before starting a prompt after the client has stopped', async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-prompt-reconnect-'));
+  const state = new Map<string, unknown>();
+  const events: string[] = [];
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  const session = {
+    getSessionId: (): string => 'acp-session',
+    sendPrompt: async (
+      _text: string,
+      _cwd: string,
+      onSessionBound?: (sessionId: string) => void,
+    ): Promise<void> => {
+      onSessionBound?.('acp-session');
+      events.push('prompt');
+    },
+  };
+  const profileController = {
+    currentProfile: (): string => '',
+    profileItems: (): [] => [],
+    restartRequired: (): boolean => false,
+    selectProfile: async (): Promise<boolean> => false,
+    customProfile: async (): Promise<boolean> => false,
+    restartHermes: async (): Promise<void> => undefined,
+    ensureConnected: async (): Promise<void> => { events.push('connect'); },
+  };
+
+  try {
+    vscodeWindow.activeTextEditor = undefined;
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+      () => {},
+      profileController,
+    );
+    const subject = provider as unknown as {
+      store: { ensureSession(): void };
+      post(message: Record<string, unknown>): void;
+      handleFromWebview(message: Record<string, unknown>): Promise<void>;
+    };
+    subject.store.ensureSession();
+    subject.post = () => {};
+
+    await subject.handleFromWebview({ type: 'send', text: 'Resume safely', requestId: 'reconnect' });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(events, ['connect', 'prompt']);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
 test('queues a follow-up submitted while busy without cancelling the active prompt', async () => {
   const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-busy-queue-'));
   let cancelCalls = 0;
