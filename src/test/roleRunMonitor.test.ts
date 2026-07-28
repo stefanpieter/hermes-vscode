@@ -53,6 +53,125 @@ test('loads only live workspace-scoped roles with per-role context and compressi
   ]);
 });
 
+test('treats linked Git worktrees as one workspace without leaking roles from another repository', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const worktree = path.join(root, 'worktrees', 'issue-548');
+  const worktreeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'issue-548');
+  const otherRepository = path.join(root, 'other-repository');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(worktree, { recursive: true });
+  await mkdir(worktreeGitDirectory, { recursive: true });
+  await mkdir(path.join(otherRepository, '.git'), { recursive: true });
+  await writeFile(path.join(worktree, '.git'), `gitdir: ${worktreeGitDirectory}\r\n`);
+  await writeFile(path.join(worktreeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(worktreeGitDirectory, 'gitdir'), `${path.join(worktree, '.git')}\n`);
+
+  await writeManifest(root, 'worktree-planner', {
+    role_id: 'planner', role: 'Planner', status: 'running', repo_root: worktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 404,
+  });
+  await writeManifest(root, 'unrelated-planner', {
+    role_id: 'planner', role: 'Unrelated Planner', status: 'running', repo_root: otherRepository,
+    started_at: '2026-07-25T21:26:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 505,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 404 || pid === 505,
+  });
+
+  assert.deepEqual(activities, [
+    { id: 'role-run:worktree-planner', name: 'Planner', status: 'running' },
+  ]);
+});
+
+test('rejects an unregistered worktree pointer even when it names the open repository common directory', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'fake-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'fake-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `gitdir: ${fakeGitDirectory}\n`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+
+  await writeManifest(root, 'unregistered-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 606,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 606,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
+test('rejects case-normalised gitfile metadata that Git itself does not recognise', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'case-normalised-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'case-normalised-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `GITDIR: ${fakeGitDirectory}\n`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(fakeGitDirectory, 'gitdir'), `${path.join(fakeWorktree, '.git')}\n`);
+
+  await writeManifest(root, 'case-normalised-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 707,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 707,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
+test('rejects a lone carriage-return gitfile terminator', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'cr-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'cr-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `gitdir: ${fakeGitDirectory}\r`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(fakeGitDirectory, 'gitdir'), `${path.join(fakeWorktree, '.git')}\n`);
+
+  await writeManifest(root, 'cr-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 808,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 808,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
 test('omits active-looking manifests whose heartbeat is stale even when the pid is reusable', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
   const workspace = path.join(root, 'workspace');

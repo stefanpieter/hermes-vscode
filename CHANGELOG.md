@@ -23,6 +23,13 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 - Disable the extension in VS Code Restricted Mode because Hermes launches an autonomous local agent with access to the current workspace.
 - Validate pasted-image extensions against a fixed allowlist in the extension host before constructing media-cache paths.
 
+## [3.5.1] — 2026-07-28
+
+### Fixed
+
+- Live standalone roles running in linked Git worktrees now appear in the repository's Lead window, while stale, dead-PID, and unrelated-repository manifests continue to fail closed.
+- Sending a message through an already healthy ACP child no longer inserts redundant “Connecting to Hermes… Connected” messages into the transcript; real starts and reconnects remain visible.
+
 ## [3.5.0] — 2026-07-27
 
 ### Added
