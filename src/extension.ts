@@ -10,6 +10,7 @@ import { PermissionRequestHandler, SessionManager } from './sessionManager';
 import { ChatPanelProvider } from './chatPanel';
 import { selectedPermissionResponse } from './permissionResponse';
 import { applyProfileSelection } from './profileSelection';
+import { ensureAcpClientStarted } from './connectionLifecycle';
 import {
   EDIT_APPROVAL_MODES,
   EditApprovalModeId,
@@ -551,12 +552,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     client.setHermesPath(hermesPath);
     client.setProfile(hermesProfile);
 
-    outputChannel.appendLine('[acp] connecting');
-    setStatus('connecting');
     try {
-      await client.start();
-      outputChannel.appendLine('[acp] connected');
-      setStatus('connected');
+      await ensureAcpClientStarted(
+        client,
+        () => {
+          outputChannel.appendLine('[acp] connecting');
+          setStatus('connecting');
+        },
+        () => {
+          outputChannel.appendLine('[acp] connected');
+          setStatus('connected');
+        },
+      );
     } catch (err) {
       outputChannel.appendLine(`[acp] connect failed: ${err}`);
       setStatus('disconnected');

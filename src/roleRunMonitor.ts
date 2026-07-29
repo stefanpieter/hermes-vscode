@@ -1,4 +1,4 @@
-import { open, readdir } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { AgentActivity } from './agentActivity';
@@ -30,6 +30,7 @@ const STATUS_MAP: Readonly<Record<string, AgentActivity['status']>> = {
 };
 const ROLE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_GIT_POINTER_BYTES = 4 * 1024;
 const DEFAULT_HEARTBEAT_STALE_AFTER_MS = 60_000;
 const MAX_HEARTBEAT_FUTURE_SKEW_MS = 5_000;
 
@@ -54,17 +55,140 @@ function safeTokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
-function parseManifest(
+async function readBoundedText(filePath: string, maxBytes: number): Promise<string> {
+  const handle = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > maxBytes) throw new Error('Git metadata exceeds size limit');
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+async function canonicalPath(candidate: string): Promise<string> {
+  try {
+    return await realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
+function gitMetadataPath(raw: string): string | undefined {
+  let value = raw;
+  if (value.endsWith('\r\n')) {
+    value = value.slice(0, -2);
+  } else if (value.endsWith('\n')) {
+    value = value.slice(0, -1);
+  } else if (value.endsWith('\r')) {
+    return undefined;
+  }
+  if (!value || value.includes('\n') || value.includes('\r')) return undefined;
+  return value;
+}
+
+function gitFileTarget(raw: string): string | undefined {
+  const line = gitMetadataPath(raw);
+  if (!line?.startsWith('gitdir: ')) return undefined;
+  const target = line.slice('gitdir: '.length);
+  return target || undefined;
+}
+
+async function gitCommonDirectory(repoRoot: string): Promise<string | undefined> {
+  const dotGit = path.join(repoRoot, '.git');
+  let gitDirectory: string;
+  let linkedWorktree = false;
+  try {
+    const metadata = await stat(dotGit);
+    if (metadata.isDirectory()) {
+      return canonicalPath(dotGit);
+    } else if (metadata.isFile()) {
+      linkedWorktree = true;
+      const target = gitFileTarget(await readBoundedText(dotGit, MAX_GIT_POINTER_BYTES));
+      if (!target) return undefined;
+      gitDirectory = path.resolve(repoRoot, target);
+      if (!(await stat(gitDirectory)).isDirectory()) return undefined;
+    } else {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  let commonDirectory = gitDirectory;
+  try {
+    const pointer = gitMetadataPath(await readBoundedText(path.join(gitDirectory, 'commondir'), MAX_GIT_POINTER_BYTES));
+    if (!pointer) return undefined;
+    commonDirectory = path.resolve(gitDirectory, pointer);
+  } catch (error) {
+    if (linkedWorktree || (error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+  }
+
+  const commonDirectoryPath = await canonicalPath(commonDirectory);
+  if (linkedWorktree) {
+    try {
+      const gitDirectoryPath = await canonicalPath(gitDirectory);
+      const worktreesDirectoryPath = await canonicalPath(path.join(commonDirectoryPath, 'worktrees'));
+      if (path.dirname(gitDirectoryPath) !== worktreesDirectoryPath) return undefined;
+
+      const backlink = gitMetadataPath(await readBoundedText(path.join(gitDirectory, 'gitdir'), MAX_GIT_POINTER_BYTES));
+      if (!backlink) return undefined;
+      const backlinkPath = path.resolve(gitDirectory, backlink);
+      const [canonicalBacklink, canonicalDotGit] = await Promise.all([
+        canonicalPath(backlinkPath),
+        canonicalPath(dotGit),
+      ]);
+      if (canonicalBacklink !== canonicalDotGit) return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return commonDirectoryPath;
+}
+
+function createWorkspaceMatcher(): (left: string, right: string) => Promise<boolean> {
+  const canonicalPaths = new Map<string, Promise<string>>();
+  const commonDirectories = new Map<string, Promise<string | undefined>>();
+  const canonical = (candidate: string): Promise<string> => {
+    const key = path.resolve(candidate);
+    let value = canonicalPaths.get(key);
+    if (!value) {
+      value = canonicalPath(key);
+      canonicalPaths.set(key, value);
+    }
+    return value;
+  };
+  const common = (candidate: string): Promise<string | undefined> => {
+    const key = path.resolve(candidate);
+    let value = commonDirectories.get(key);
+    if (!value) {
+      value = gitCommonDirectory(key);
+      commonDirectories.set(key, value);
+    }
+    return value;
+  };
+
+  return async (left: string, right: string): Promise<boolean> => {
+    const [leftPath, rightPath] = await Promise.all([canonical(left), canonical(right)]);
+    if (leftPath === rightPath) return true;
+    const [leftCommon, rightCommon] = await Promise.all([common(leftPath), common(rightPath)]);
+    return leftCommon !== undefined && leftCommon === rightCommon;
+  };
+}
+
+async function parseManifest(
   raw: unknown,
   manifestDirectory: string,
   scope: RoleRunScope,
   options: Required<RoleRunLoadOptions>,
-): ParsedRoleRun | undefined {
+  workspaceMatches: (left: string, right: string) => Promise<boolean>,
+): Promise<ParsedRoleRun | undefined> {
   const data = record(raw);
   if (!data || data.schema_version !== '1.0.0' || data.execution_mode !== 'standalone_fresh_session') return undefined;
 
   const repoRoot = typeof data.repo_root === 'string' ? data.repo_root : '';
-  if (!repoRoot || path.resolve(repoRoot) !== path.resolve(scope.workspaceRoot)) return undefined;
+  if (!repoRoot || !await workspaceMatches(repoRoot, scope.workspaceRoot)) return undefined;
 
   const startedAt = typeof data.started_at === 'string' ? Date.parse(data.started_at) : Number.NaN;
   if (!Number.isFinite(startedAt)) return undefined;
@@ -123,7 +247,7 @@ async function readBoundedJson(manifestPath: string): Promise<unknown> {
  * The manifest is authoritative for identity and lifecycle. Missing fields are
  * omitted rather than inferred from packet text or process names. A role can
  * predate a restored Lead session; live PID + fresh heartbeat are the runtime
- * gates, while workspace identity prevents cross-window leakage.
+ * gates, while exact-path or shared Git-worktree identity prevents cross-repository leakage.
  */
 export async function loadRoleRunActivities(
   runtimeRoot: string,
@@ -135,6 +259,7 @@ export async function loadRoleRunActivities(
     processIsAlive: suppliedOptions.processIsAlive ?? processIsAlive,
     heartbeatStaleAfterMs: suppliedOptions.heartbeatStaleAfterMs ?? DEFAULT_HEARTBEAT_STALE_AFTER_MS,
   };
+  const workspaceMatches = createWorkspaceMatcher();
   let directories;
   try {
     directories = await readdir(path.join(runtimeRoot, 'runs'), { withFileTypes: true });
@@ -154,7 +279,7 @@ export async function loadRoleRunActivities(
       const manifestDirectory = path.join(runtimeRoot, 'runs', entry.name);
       try {
         const raw = await readBoundedJson(path.join(manifestDirectory, 'manifest.json'));
-        return parseManifest(raw, manifestDirectory, scope, options);
+        return parseManifest(raw, manifestDirectory, scope, options, workspaceMatches);
       } catch {
         return undefined;
       }
@@ -176,6 +301,7 @@ export class RoleRunMonitor {
   private timer: NodeJS.Timeout | undefined;
   private refreshTail: Promise<void> = Promise.resolve();
   private lastSignature = '';
+  private lastScope: RoleRunScope | undefined;
 
   constructor(
     private readonly runtimeRoot: string,
@@ -183,6 +309,19 @@ export class RoleRunMonitor {
     private readonly onUpdate: (scope: RoleRunScope, activities: AgentActivity[]) => void,
     private readonly intervalMs = 2_000,
   ) {}
+
+  private sameScope(left: RoleRunScope, right: RoleRunScope): boolean {
+    return left.scopeId === right.scopeId
+      && path.resolve(left.workspaceRoot) === path.resolve(right.workspaceRoot);
+  }
+
+  private publish(scope: RoleRunScope, activities: AgentActivity[]): void {
+    const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, activities]);
+    if (signature === this.lastSignature) return;
+    this.lastSignature = signature;
+    this.lastScope = { ...scope };
+    this.onUpdate(scope, activities);
+  }
 
   start(): void {
     if (this.timer) return;
@@ -192,23 +331,31 @@ export class RoleRunMonitor {
   }
 
   refresh(): Promise<void> {
-    const scope = this.scope();
-    if (!scope) return Promise.resolve();
+    const requestedScope = this.scope();
 
     const run = async (): Promise<void> => {
+      if (!requestedScope) {
+        if (this.lastScope) this.publish(this.lastScope, []);
+        return;
+      }
+
       let activities: AgentActivity[];
       try {
-        activities = await loadRoleRunActivities(this.runtimeRoot, scope);
+        activities = await loadRoleRunActivities(this.runtimeRoot, requestedScope);
       } catch {
         // Runtime manifests are optional metadata. I/O failures clear stale
         // role state instead of destabilising the extension host.
         activities = [];
       }
-      const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, activities]);
-      if (signature !== this.lastSignature) {
-        this.lastSignature = signature;
-        this.onUpdate(scope, activities);
+
+      const currentScope = this.scope();
+      if (!currentScope || !this.sameScope(requestedScope, currentScope)) {
+        // A workspace switch can race an asynchronous manifest scan. Never
+        // publish role identity from the superseded scope into the active UI.
+        this.publish(currentScope ?? this.lastScope ?? requestedScope, []);
+        return;
       }
+      this.publish(currentScope, activities);
     };
 
     const queued = this.refreshTail.catch(() => {}).then(run);

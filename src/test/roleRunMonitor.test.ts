@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadRoleRunActivities } from '../roleRunMonitor';
+import { loadRoleRunActivities, RoleRunMonitor, type RoleRunScope } from '../roleRunMonitor';
 
 async function writeManifest(root: string, runId: string, data: Record<string, unknown>): Promise<void> {
   const dir = path.join(root, 'runs', runId);
@@ -51,6 +51,150 @@ test('loads only live workspace-scoped roles with per-role context and compressi
       contextUsed: 799_000, contextSize: 1_050_000, compressionCount: 2,
     },
   ]);
+});
+
+test('treats linked Git worktrees as one workspace without leaking roles from another repository', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const worktree = path.join(root, 'worktrees', 'issue-548');
+  const worktreeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'issue-548');
+  const otherRepository = path.join(root, 'other-repository');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(worktree, { recursive: true });
+  await mkdir(worktreeGitDirectory, { recursive: true });
+  await mkdir(path.join(otherRepository, '.git'), { recursive: true });
+  await writeFile(path.join(worktree, '.git'), `gitdir: ${worktreeGitDirectory}\r\n`);
+  await writeFile(path.join(worktreeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(worktreeGitDirectory, 'gitdir'), `${path.join(worktree, '.git')}\n`);
+
+  await writeManifest(root, 'worktree-planner', {
+    role_id: 'planner', role: 'Planner', status: 'running', repo_root: worktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 404,
+  });
+  await writeManifest(root, 'unrelated-planner', {
+    role_id: 'planner', role: 'Unrelated Planner', status: 'running', repo_root: otherRepository,
+    started_at: '2026-07-25T21:26:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 505,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 404 || pid === 505,
+  });
+
+  assert.deepEqual(activities, [
+    { id: 'role-run:worktree-planner', name: 'Planner', status: 'running' },
+  ]);
+});
+
+test('rejects a forged commondir in a foreign regular repository', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const foreignRepository = path.join(root, 'foreign-repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const foreignGitDirectory = path.join(foreignRepository, '.git');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(foreignGitDirectory, { recursive: true });
+  await writeFile(path.join(foreignGitDirectory, 'commondir'), `${commonGitDirectory}\n`);
+
+  await writeManifest(root, 'foreign-planner', {
+    role_id: 'planner', role: 'Foreign Planner', status: 'running', repo_root: foreignRepository,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 606,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 606,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
+test('rejects an unregistered worktree pointer even when it names the open repository common directory', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'fake-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'fake-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `gitdir: ${fakeGitDirectory}\n`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+
+  await writeManifest(root, 'unregistered-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 606,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 606,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
+test('rejects case-normalised gitfile metadata that Git itself does not recognise', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'case-normalised-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'case-normalised-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `GITDIR: ${fakeGitDirectory}\n`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(fakeGitDirectory, 'gitdir'), `${path.join(fakeWorktree, '.git')}\n`);
+
+  await writeManifest(root, 'case-normalised-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 707,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 707,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
+test('rejects a lone carriage-return gitfile terminator', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const fakeWorktree = path.join(root, 'cr-worktree');
+  const fakeGitDirectory = path.join(commonGitDirectory, 'worktrees', 'cr-worktree');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(fakeWorktree, { recursive: true });
+  await mkdir(fakeGitDirectory, { recursive: true });
+  await writeFile(path.join(fakeWorktree, '.git'), `gitdir: ${fakeGitDirectory}\r`);
+  await writeFile(path.join(fakeGitDirectory, 'commondir'), '../..\n');
+  await writeFile(path.join(fakeGitDirectory, 'gitdir'), `${path.join(fakeWorktree, '.git')}\n`);
+
+  await writeManifest(root, 'cr-worktree', {
+    role_id: 'planner', role: 'Impersonated Planner', status: 'running', repo_root: fakeWorktree,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 808,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 808,
+  });
+
+  assert.deepEqual(activities, []);
 });
 
 test('omits active-looking manifests whose heartbeat is stale even when the pid is reusable', async () => {
@@ -154,4 +298,67 @@ test('excludes stale, malformed, and unsupported role manifests without guessing
     workspaceRoot: workspace,
   });
   assert.deepEqual(activities, []);
+});
+
+test('clears accepted role activities when the workspace scope disappears', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  const now = new Date();
+  await writeManifest(root, 'scoped-developer', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: now.toISOString(), heartbeat_at: now.toISOString(), pid: process.pid,
+  });
+
+  let currentScope: RoleRunScope | undefined = {
+    scopeId: `workspace:${workspace}`,
+    workspaceRoot: workspace,
+  };
+  const updates: Array<{ scope: RoleRunScope; activities: unknown[] }> = [];
+  const monitor = new RoleRunMonitor(
+    root,
+    () => currentScope,
+    (scope, activities) => updates.push({ scope, activities }),
+  );
+
+  await monitor.refresh();
+  assert.equal(updates.at(-1)?.activities.length, 1);
+
+  currentScope = undefined;
+  await monitor.refresh();
+
+  assert.deepEqual(updates.at(-1)?.activities, []);
+});
+
+test('discards an in-flight refresh when the workspace scope changes', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspaceA = path.join(root, 'workspace-a');
+  const workspaceB = path.join(root, 'workspace-b');
+  await mkdir(workspaceA);
+  await mkdir(workspaceB);
+  const now = new Date();
+  await writeManifest(root, 'workspace-a-developer', {
+    role_id: 'developer', role: 'Workspace A Developer', status: 'running', repo_root: workspaceA,
+    started_at: now.toISOString(), heartbeat_at: now.toISOString(), pid: process.pid,
+  });
+
+  let currentScope: RoleRunScope | undefined = {
+    scopeId: `workspace:${workspaceA}`,
+    workspaceRoot: workspaceA,
+  };
+  const updates: Array<{ scope: RoleRunScope; activities: unknown[] }> = [];
+  const monitor = new RoleRunMonitor(
+    root,
+    () => currentScope,
+    (scope, activities) => updates.push({ scope, activities }),
+  );
+
+  const staleRefresh = monitor.refresh();
+  currentScope = {
+    scopeId: `workspace:${workspaceB}`,
+    workspaceRoot: workspaceB,
+  };
+  await staleRefresh;
+
+  assert.deepEqual(updates, [{ scope: currentScope, activities: [] }]);
 });

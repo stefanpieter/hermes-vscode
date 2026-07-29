@@ -12,6 +12,7 @@ class FakeClient {
   holdSessionNew = false;
   failSetMode = false;
   emitBackgroundDuringLoad = false;
+  promptResponse: unknown = {};
   calls: { method: string; params: unknown }[] = [];
   notifications: { method: string; params: unknown }[] = [];
   exitHandlers: Array<(code: number) => void> = [];
@@ -46,8 +47,11 @@ class FakeClient {
       }
       return { sessionId: 'active-session' };
     }
-    if (method === 'session/prompt' && this.holdPrompt) {
-      await new Promise<void>((resolve) => { this.promptResolve = resolve; });
+    if (method === 'session/prompt') {
+      if (this.holdPrompt) {
+        await new Promise<void>((resolve) => { this.promptResolve = resolve; });
+      }
+      return this.promptResponse;
     }
     return {};
   }
@@ -200,6 +204,26 @@ test('keeps streaming messages inside an active prompt as foreground', async () 
   assert.equal(events.at(-1)?.background, false);
   client.promptResolve?.();
   await prompt;
+});
+
+test('does not treat cumulative prompt response usage as current context pressure', async () => {
+  const client = new FakeClient();
+  client.promptResponse = {
+    usage: {
+      inputTokens: 2_710_235,
+      outputTokens: 16_077,
+      totalTokens: 2_726_312,
+      cachedReadTokens: 2_341_504,
+    },
+  };
+  const { manager, events } = managerWithEvents(client);
+
+  await manager.sendPrompt('long tool turn', '/tmp');
+
+  assert.equal(
+    events.some(event => event.contextUsed !== undefined || event.cachedTokens !== undefined),
+    false,
+  );
 });
 
 test('keeps stream dedup isolated from an inactive session autonomous lifecycle', async () => {
