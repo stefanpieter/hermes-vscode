@@ -102,7 +102,7 @@ async function gitCommonDirectory(repoRoot: string): Promise<string | undefined>
   try {
     const metadata = await stat(dotGit);
     if (metadata.isDirectory()) {
-      gitDirectory = dotGit;
+      return canonicalPath(dotGit);
     } else if (metadata.isFile()) {
       linkedWorktree = true;
       const target = gitFileTarget(await readBoundedText(dotGit, MAX_GIT_POINTER_BYTES));

@@ -89,6 +89,31 @@ test('treats linked Git worktrees as one workspace without leaking roles from an
   ]);
 });
 
+test('rejects a forged commondir in a foreign regular repository', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const repository = path.join(root, 'repository');
+  const foreignRepository = path.join(root, 'foreign-repository');
+  const commonGitDirectory = path.join(repository, '.git');
+  const foreignGitDirectory = path.join(foreignRepository, '.git');
+  await mkdir(commonGitDirectory, { recursive: true });
+  await mkdir(foreignGitDirectory, { recursive: true });
+  await writeFile(path.join(foreignGitDirectory, 'commondir'), `${commonGitDirectory}\n`);
+
+  await writeManifest(root, 'foreign-planner', {
+    role_id: 'planner', role: 'Foreign Planner', status: 'running', repo_root: foreignRepository,
+    started_at: '2026-07-25T21:25:15.298Z', heartbeat_at: '2026-07-25T21:29:55.000Z', pid: 606,
+  });
+
+  const activities = await loadRoleRunActivities(root, {
+    workspaceRoot: repository,
+  }, {
+    now: () => Date.parse('2026-07-25T21:30:00Z'),
+    processIsAlive: pid => pid === 606,
+  });
+
+  assert.deepEqual(activities, []);
+});
+
 test('rejects an unregistered worktree pointer even when it names the open repository common directory', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
   const repository = path.join(root, 'repository');
