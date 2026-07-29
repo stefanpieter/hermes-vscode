@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadRoleRunActivities } from '../roleRunMonitor';
+import { loadRoleRunActivities, RoleRunMonitor, type RoleRunScope } from '../roleRunMonitor';
 
 async function writeManifest(root: string, runId: string, data: Record<string, unknown>): Promise<void> {
   const dir = path.join(root, 'runs', runId);
@@ -298,4 +298,67 @@ test('excludes stale, malformed, and unsupported role manifests without guessing
     workspaceRoot: workspace,
   });
   assert.deepEqual(activities, []);
+});
+
+test('clears accepted role activities when the workspace scope disappears', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  const now = new Date();
+  await writeManifest(root, 'scoped-developer', {
+    role_id: 'developer', role: 'Developer', status: 'running', repo_root: workspace,
+    started_at: now.toISOString(), heartbeat_at: now.toISOString(), pid: process.pid,
+  });
+
+  let currentScope: RoleRunScope | undefined = {
+    scopeId: `workspace:${workspace}`,
+    workspaceRoot: workspace,
+  };
+  const updates: Array<{ scope: RoleRunScope; activities: unknown[] }> = [];
+  const monitor = new RoleRunMonitor(
+    root,
+    () => currentScope,
+    (scope, activities) => updates.push({ scope, activities }),
+  );
+
+  await monitor.refresh();
+  assert.equal(updates.at(-1)?.activities.length, 1);
+
+  currentScope = undefined;
+  await monitor.refresh();
+
+  assert.deepEqual(updates.at(-1)?.activities, []);
+});
+
+test('discards an in-flight refresh when the workspace scope changes', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hermes-role-runs-'));
+  const workspaceA = path.join(root, 'workspace-a');
+  const workspaceB = path.join(root, 'workspace-b');
+  await mkdir(workspaceA);
+  await mkdir(workspaceB);
+  const now = new Date();
+  await writeManifest(root, 'workspace-a-developer', {
+    role_id: 'developer', role: 'Workspace A Developer', status: 'running', repo_root: workspaceA,
+    started_at: now.toISOString(), heartbeat_at: now.toISOString(), pid: process.pid,
+  });
+
+  let currentScope: RoleRunScope | undefined = {
+    scopeId: `workspace:${workspaceA}`,
+    workspaceRoot: workspaceA,
+  };
+  const updates: Array<{ scope: RoleRunScope; activities: unknown[] }> = [];
+  const monitor = new RoleRunMonitor(
+    root,
+    () => currentScope,
+    (scope, activities) => updates.push({ scope, activities }),
+  );
+
+  const staleRefresh = monitor.refresh();
+  currentScope = {
+    scopeId: `workspace:${workspaceB}`,
+    workspaceRoot: workspaceB,
+  };
+  await staleRefresh;
+
+  assert.deepEqual(updates, [{ scope: currentScope, activities: [] }]);
 });

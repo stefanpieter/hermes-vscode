@@ -301,6 +301,7 @@ export class RoleRunMonitor {
   private timer: NodeJS.Timeout | undefined;
   private refreshTail: Promise<void> = Promise.resolve();
   private lastSignature = '';
+  private lastScope: RoleRunScope | undefined;
 
   constructor(
     private readonly runtimeRoot: string,
@@ -308,6 +309,19 @@ export class RoleRunMonitor {
     private readonly onUpdate: (scope: RoleRunScope, activities: AgentActivity[]) => void,
     private readonly intervalMs = 2_000,
   ) {}
+
+  private sameScope(left: RoleRunScope, right: RoleRunScope): boolean {
+    return left.scopeId === right.scopeId
+      && path.resolve(left.workspaceRoot) === path.resolve(right.workspaceRoot);
+  }
+
+  private publish(scope: RoleRunScope, activities: AgentActivity[]): void {
+    const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, activities]);
+    if (signature === this.lastSignature) return;
+    this.lastSignature = signature;
+    this.lastScope = { ...scope };
+    this.onUpdate(scope, activities);
+  }
 
   start(): void {
     if (this.timer) return;
@@ -317,23 +331,31 @@ export class RoleRunMonitor {
   }
 
   refresh(): Promise<void> {
-    const scope = this.scope();
-    if (!scope) return Promise.resolve();
+    const requestedScope = this.scope();
 
     const run = async (): Promise<void> => {
+      if (!requestedScope) {
+        if (this.lastScope) this.publish(this.lastScope, []);
+        return;
+      }
+
       let activities: AgentActivity[];
       try {
-        activities = await loadRoleRunActivities(this.runtimeRoot, scope);
+        activities = await loadRoleRunActivities(this.runtimeRoot, requestedScope);
       } catch {
         // Runtime manifests are optional metadata. I/O failures clear stale
         // role state instead of destabilising the extension host.
         activities = [];
       }
-      const signature = JSON.stringify([scope.scopeId, scope.workspaceRoot, activities]);
-      if (signature !== this.lastSignature) {
-        this.lastSignature = signature;
-        this.onUpdate(scope, activities);
+
+      const currentScope = this.scope();
+      if (!currentScope || !this.sameScope(requestedScope, currentScope)) {
+        // A workspace switch can race an asynchronous manifest scan. Never
+        // publish role identity from the superseded scope into the active UI.
+        this.publish(currentScope ?? this.lastScope ?? requestedScope, []);
+        return;
       }
+      this.publish(currentScope, activities);
     };
 
     const queued = this.refreshTail.catch(() => {}).then(run);
