@@ -258,14 +258,12 @@ export class SessionManager {
       if (turn.cancelled) throw new Error('Cancelled');
       this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
 
-      let promptResponse: Record<string, unknown> = {};
       turn.promptActive = true;
       try {
-        const result = await this.client.call('session/prompt', {
+        await this.client.call('session/prompt', {
           sessionId,
           prompt: [{ type: 'text', text }],
         });
-        promptResponse = (result as Record<string, unknown>) ?? {};
       } catch (err) {
         if (turn.cancelled) throw new Error('Cancelled');
         throw err;
@@ -275,22 +273,10 @@ export class SessionManager {
       // next queued turn while the cancelled request is still live remotely.
       if (turn.cancelled) throw new Error('Cancelled');
 
-      // Extract current context usage from PromptResponse.
-      // usage.inputTokens = last_prompt_tokens (total sent to API including cached).
-      // usage.cachedReadTokens = portion served from Anthropic prompt cache (90% cheaper).
-      // _meta.contextLength = model context window size (for progress bar).
-      const usage = promptResponse.usage as Record<string, unknown> | undefined;
-      const meta = promptResponse['_meta'] as Record<string, unknown> | undefined;
-      const inputTokens = typeof usage?.inputTokens === 'number' ? usage.inputTokens as number : 0;
-      const cachedTokens = typeof usage?.cachedReadTokens === 'number' ? usage.cachedReadTokens as number : 0;
-      // contextUsed shows total (matches what the model "sees"), but we also emit cached for the UI.
-      const contextUsed: number | undefined = inputTokens > 0 ? inputTokens : undefined;
-      const contextSize: number | undefined = (
-        typeof meta?.contextLength === 'number' && meta.contextLength > 0 ? meta.contextLength as number :
-        undefined
-      );
-      this.log(`[session] prompt done ${sessionId}${contextUsed ? ` used=${contextUsed}` : ''}${cachedTokens ? ` cached=${cachedTokens}` : ''}${contextSize ? ` size=${contextSize}` : ''}`);
-      this.updateHandler?.({ session_id: sessionId, done: true, contextUsed, contextSize, cachedTokens });
+      // PromptResponse usage is cumulative turn billing, not current context
+      // pressure. Context metrics arrive authoritatively via usage_update.
+      this.log(`[session] prompt done ${sessionId}`);
+      this.updateHandler?.({ session_id: sessionId, done: true });
     } finally {
       if (turn.sessionId) this.accumulatedBySession.delete(turn.sessionId);
       if (this.activePromptTurn === turn) this.activePromptTurn = null;

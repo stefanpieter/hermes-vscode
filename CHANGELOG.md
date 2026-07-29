@@ -29,6 +29,7 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 
 - Live standalone roles running in linked Git worktrees now appear in the repository's Lead window, while stale, dead-PID, and unrelated-repository manifests continue to fail closed.
 - Sending a message through an already healthy ACP child no longer inserts redundant “Connecting to Hermes… Connected” messages into the transcript; real starts and reconnects remain visible.
+- Lead context now follows ACP's current-window usage feed instead of briefly substituting cumulative turn billing, and compression counts remain visible when Hermes publishes them.
 
 ## [3.5.0] — 2026-07-27
 
