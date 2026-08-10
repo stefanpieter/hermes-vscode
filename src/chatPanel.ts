@@ -25,6 +25,12 @@ import type { AttachedFile, BackgroundProcessState, SessionUpdateEvent, StoredMe
 import type { AgentActivity } from './agentActivity';
 import type { AvailableSlashCommand } from './slashCommands';
 import { defaultRoleRunsRoot, RoleRunMonitor } from './roleRunMonitor';
+import {
+  defaultHermesHome,
+  DelegationActivityMonitor,
+  DelegationRegistrationStore,
+  resolveHermesHomeForProfile,
+} from './delegationActivityMonitor';
 
 interface PromptRequest {
   text: string;
@@ -59,10 +65,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private readonly backgroundProcessesBySession = new Map<string, Map<string, BackgroundProcessState>>();
   private readonly agentActivitiesBySession = new Map<string, AgentActivity[]>();
   private workspaceRoleActivities: AgentActivity[] = [];
+  private sessionDelegationActivities: AgentActivity[] = [];
+  private sessionDelegationScope?: { sessionId: string; generation: number };
   private readonly availableCommandsBySession = new Map<string, AvailableSlashCommand[]>();
   private readonly contextUsageBySession = new Map<string, SessionContextUsage>();
   private readonly backgroundMessages: BackgroundMessageAccumulator;
   private readonly roleRunMonitor: RoleRunMonitor;
+  private readonly delegationRegistrationStore = new DelegationRegistrationStore();
+  private readonly delegationActivityMonitor: DelegationActivityMonitor;
   private runtimeHydration: Promise<void> | undefined;
   private lifecycleTransition: Promise<void> | undefined;
 
@@ -106,6 +116,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
       },
     );
+    this.delegationActivityMonitor = new DelegationActivityMonitor(
+      () => resolveHermesHomeForProfile(
+        this.profileController?.currentProfile(),
+        defaultHermesHome(),
+      ),
+      () => this.delegationRegistrationStore.scope(
+        this.session.getSessionId(),
+        this.session.getRuntimeGeneration(),
+      ),
+      (scope, activities) => {
+        this.sessionDelegationScope = { sessionId: scope.sessionId, generation: scope.generation };
+        this.sessionDelegationActivities = activities.map(activity => ({ ...activity }));
+        this.post({
+          type: 'statusBar',
+          agentActivities: this.agentActivitiesFor(this.store.getAcpSessionId()),
+        });
+      },
+    );
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -123,6 +151,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     // Create first session if none exist
     this.store.ensureSession();
     this.roleRunMonitor.start();
+    this.delegationActivityMonitor.start();
 
     // Restore ACP session ID from persisted state (enables Hermes context resume)
     const active = this.store.active();
@@ -142,6 +171,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     // Route session updates to the webview
     this.session.onUpdate((event) => {
+      if (!event.replay && event.delegationRegistration && event.runtimeGeneration !== undefined) {
+        this.delegationRegistrationStore.register(
+          event.session_id,
+          event.runtimeGeneration,
+          event.delegationRegistration,
+        );
+        void this.delegationActivityMonitor.refresh();
+      }
       if (event.agentActivities !== undefined) {
         this.agentActivitiesBySession.set(event.session_id, event.agentActivities.map(activity => ({ ...activity })));
         if (this.isActiveRuntimeSession(event.session_id)) {
@@ -355,6 +392,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     this.view = undefined;
     this.backgroundMessages.dispose();
     this.roleRunMonitor.dispose();
+    this.delegationActivityMonitor.dispose();
   }
 
   private flushBackgroundMessage(acpSessionId: string, text: string): void {
@@ -398,8 +436,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
 
   private agentActivitiesFor(acpSessionId?: string, _localSessionId = this.store.activeId): AgentActivity[] {
     const transport = acpSessionId ? this.agentActivitiesBySession.get(acpSessionId) : undefined;
+    const delegationScope = this.sessionDelegationScope;
+    const delegations = delegationScope
+      && acpSessionId === delegationScope.sessionId
+      && this.session.getRuntimeGeneration() === delegationScope.generation
+      ? this.sessionDelegationActivities
+      : [];
     const combined = new Map<string, AgentActivity>();
-    for (const activity of [...(transport ?? []), ...this.workspaceRoleActivities]) {
+    for (const activity of [
+      ...(transport ?? []),
+      ...this.workspaceRoleActivities,
+      ...delegations,
+    ]) {
       combined.set(activity.id, { ...activity });
     }
     return [...combined.values()];

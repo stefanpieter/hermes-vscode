@@ -8,6 +8,16 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 
 ## [Unreleased]
 
+### Added
+
+- Show active `delegate_task` workers as session-bound `Delegate · …` activity chips, and remove them when their delegation finishes or the owning ACP runtime generation ends.
+
+### Fixed
+
+- Prefer bounded Hermes ACP delegation metadata so large multi-task dispatches remain observable even when human-readable tool output is truncated, while retaining strict legacy parsing for older agents.
+- Preserve a successful, session-owned delegation registration when its initiating foreground prompt is cancelled after background dispatch.
+- Accept both current and producer-supported legacy delegation cache layouts with the same fail-closed path and symlink controls, and align the observable manifest envelope and Unicode character counting with Hermes Agent's explicit 100-worker, 500-character-goal safety ceiling.
+
 ### Maintenance
 
 - Added transparent maintained-fork governance, contribution, security, release, and migration policies while the upstream repository and Marketplace handover is discussed.
