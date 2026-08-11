@@ -132,7 +132,7 @@ test('identity bootstrap is manual, OIDC-scoped, environment-bound, and secretle
   const noticeIndex = workflow.indexOf('::notice title=Marketplace publishing principal::$resource_id');
   assert.notEqual(validationIndex, -1);
   assert.ok(noticeIndex > validationIndex);
-  assert.match(workflow.slice(validationIndex, noticeIndex), /exit 1\n\s+fi/);
+  assert.match(workflow.slice(validationIndex, noticeIndex), /exit 1\r?\n\s+fi/);
   assert.doesNotMatch(workflow, /app\.vssps\.visualstudio\.com\/_apis\/profile\/profiles\/me/);
   assert.doesNotMatch(workflow, /VSCE_PAT|secrets\.|pull_request:|push:|release:/);
 });
