@@ -125,8 +125,10 @@ test('identity bootstrap is manual, OIDC-scoped, environment-bound, and secretle
   assert.match(workflow, /environment: marketplace-production/);
   assert.match(workflow, /Azure\/login@[0-9a-f]{40}/);
   assert.match(workflow, /client-id: \$\{\{ vars\.AZURE_CLIENT_ID \}\}/);
-  assert.match(workflow, /app\.vssps\.visualstudio\.com\/_apis\/profile\/profiles\/me/);
-  assert.match(workflow, /499b84ac-1321-427f-aa17-267ca6975798/);
+  assert.match(workflow, /run: npm ci/);
+  assert.match(workflow, /vsce verify-pat --azure-credential stefanpieter/);
+  assert.match(workflow, /Access Denied:\\s\*/);
+  assert.doesNotMatch(workflow, /app\.vssps\.visualstudio\.com\/_apis\/profile\/profiles\/me/);
   assert.doesNotMatch(workflow, /VSCE_PAT|secrets\.|pull_request:|push:|release:/);
 });
 
