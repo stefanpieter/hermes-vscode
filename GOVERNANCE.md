@@ -2,7 +2,7 @@
 
 ## Project status
 
-This project is an actively maintained fork of `joaompfp/hermes-vscode`. The project is seeking a cooperative co-maintenance or ownership handover so existing Marketplace users are not stranded. Until that is resolved, `stefanpieter/hermes-vscode` is the interim maintenance repository and must describe itself as a maintained fork rather than an upstream or official release.
+`stefanpieter/hermes-vscode` is the canonical source repository for this actively maintained successor project. It carries forward the MIT-licensed history of `joaompfp/hermes-vscode`, but the original repository is no longer this project's upstream contribution or merge target. This source-maintenance decision does not transfer the original Marketplace publisher account or authorise publication through it.
 
 ## Principles
 
@@ -24,7 +24,7 @@ Contributors may propose changes through pull requests. Contributions require te
 
 ### Original author
 
-Joao Peixoto remains the original author and copyright holder. Original authorship does not imply responsibility for maintained-fork releases. If Joao accepts a handover or co-maintenance arrangement, this document will be updated to reflect the agreed roles.
+Joao Peixoto remains the original author and copyright holder. Original authorship does not imply responsibility for successor releases.
 
 ## Decisions
 
@@ -53,8 +53,8 @@ Maintainers must not approve their own high-risk release without an independent 
 
 The preferred long-term home is an organisation willing to provide at least two maintainers and organisation-owned release credentials. A transfer must preserve the MIT history and clearly communicate any Marketplace migration.
 
-If the interim maintainer becomes unavailable, a contributor with sustained reviewed contributions may request maintainership in a public issue. Existing maintainers should respond within 30 days or document why additional evidence is needed.
+If a maintainer becomes unavailable, a contributor with sustained reviewed contributions may request maintainership in a public issue. Existing maintainers should respond within 30 days or document why additional evidence is needed.
 
-## Relationship with upstream
+## Relationship with the original project
 
-The original repository remains an upstream source. Useful upstream changes should be reviewed and incorporated. If upstream maintenance resumes, collaboration or reunification is preferred where it does not regress compatibility or strand successor users.
+The original repository is preserved as provenance and may be consulted like any other external source, but changes from this project are not submitted there and it is not configured as a writable remote. Original authorship, licence notices, and commit history remain credited.

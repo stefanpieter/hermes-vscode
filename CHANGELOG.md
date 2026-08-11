@@ -21,7 +21,7 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 
 ### Maintenance
 
-- Added transparent maintained-fork governance, contribution, security, release, and migration policies while the upstream repository and Marketplace handover is discussed.
+- Established `stefanpieter/hermes-vscode` as the canonical maintained successor repository while preserving original MIT attribution and keeping Marketplace publisher authority as a separate release gate.
 - Added cross-platform CI for type checking, secret scanning, regression tests, production builds, dependency security auditing, and deterministic VSIX package inspection without publicly uploading an unauthorised publisher artefact.
 - Made background-test discovery independent of shell glob expansion so the suite runs consistently on Linux, macOS, and Windows CI; branch pushes now run separately only for `main` to avoid duplicate pull-request jobs.
 - Added a single `npm run verify` release gate and removed generated profile test output after successful runs.

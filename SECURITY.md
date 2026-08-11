@@ -8,7 +8,7 @@ Security fixes are developed against the current maintained branch. The original
 |---|---|
 | Maintained default branch | Supported |
 | Latest maintained GitHub release, once published | Supported |
-| Original `joaompfp` Marketplace release | Upstream-owned; upgrade path pending |
+| Original `joaompfp` Marketplace release | Original-publisher-owned; not this project's release channel |
 | Older local VSIX builds | Unsupported |
 
 ## Reporting a vulnerability
@@ -25,7 +25,7 @@ Do not include secrets, production credentials, private source, or personal Herm
 
 If private vulnerability reporting is temporarily unavailable, open a public issue containing no vulnerability detail and ask the maintainer to establish a private channel. Do not disclose the vulnerability itself in that issue.
 
-The interim maintainer aims to acknowledge reports within three business days. Resolution timing depends on severity and coordination needs.
+The maintainers aim to acknowledge reports within three business days. Resolution timing depends on severity and coordination needs.
 
 ## Security boundaries
 
