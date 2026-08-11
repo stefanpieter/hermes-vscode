@@ -139,7 +139,16 @@ test('identity bootstrap is manual, OIDC-scoped, environment-bound, and secretle
 
 test('release guidance uses the exact GitHub environment OIDC subject', () => {
   const releasing = fs.readFileSync(new URL('../docs/releasing.md', import.meta.url), 'utf8');
+  const transitionPlan = fs.readFileSync(
+    new URL('../docs/plans/2026-07-24-maintained-successor-transition.md', import.meta.url),
+    'utf8',
+  );
   assert.match(releasing, /repo:stefanpieter\/hermes-vscode:environment:marketplace-production/);
   assert.match(releasing, /Other issuer/);
+  assert.match(releasing, /accepts only `v\*` tags/);
+  assert.match(releasing, /complete automatically after an authorised stable GitHub Release/);
   assert.doesNotMatch(releasing, /repo:[^`\s]+@\d+\//);
+  assert.match(transitionPlan, /maintained successor candidate is version `3\.6\.0`/);
+  assert.match(transitionPlan, /current `package\.json` uses the separate successor Marketplace identity/);
+  assert.doesNotMatch(transitionPlan, /current `package\.json` still uses the original Marketplace identity/);
 });

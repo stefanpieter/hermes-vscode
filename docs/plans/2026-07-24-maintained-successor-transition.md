@@ -16,9 +16,9 @@ The source transition is complete at `stefanpieter/hermes-vscode`; changes are n
 - The source is MIT licensed. The original copyright and permission notice must remain.
 - Upstream's last source push and Marketplace update were on 2026-04-06.
 - The upstream Marketplace listing is version 3.0.0.
-- The maintained line is version 3.5.3 and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
+- The maintained successor candidate is version `3.6.0` and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
 - A handover/co-maintenance proposal was posted on upstream PR #16 on 2026-07-24: https://github.com/joaompfp/hermes-vscode/pull/16#issuecomment-5073543397
-- The current `package.json` still uses the original Marketplace identity. It is valid only for local compatibility testing and is not authorised for public publication by the successor project without distribution authority for that identity.
+- The current `package.json` uses the separate successor Marketplace identity `stefanpieter.hermes-ai-agent`. The original `joaompfp.hermes-ai-agent` identity remains outside this project's authority and is referenced only for provenance, coexistence detection, and migration guidance.
 
 ## Guardrails
 
