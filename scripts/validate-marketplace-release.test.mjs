@@ -150,7 +150,8 @@ test('release guidance uses the exact GitHub environment OIDC subject', () => {
   assert.match(releasing, /Marketplace requires package names to be globally unique/);
   assert.match(releasing, /`hermes-ai-agent-maintained`/);
   assert.doesNotMatch(releasing, /repo:[^`\s]+@\d+\//);
-  assert.match(transitionPlan, /maintained successor candidate is version `3\.6\.0`/);
+  assert.match(transitionPlan, /maintained successor release is version `3\.6\.0`/);
+  assert.match(transitionPlan, /published and publicly verified on 2026-08-11/);
   assert.match(transitionPlan, /current `package\.json` uses the separate successor Marketplace identity/);
   assert.doesNotMatch(transitionPlan, /current `package\.json` still uses the original Marketplace identity/);
 });

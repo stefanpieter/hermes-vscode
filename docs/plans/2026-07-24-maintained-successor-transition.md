@@ -1,7 +1,7 @@
 # Maintained successor transition plan
 
 Date: 2026-07-24
-Status: Source transition complete; successor distribution identity selected (`stefanpieter.hermes-ai-agent-maintained`), initial publication pending
+Status: Complete; successor `stefanpieter.hermes-ai-agent-maintained@3.6.0` published and publicly verified on 2026-08-11
 Canonical repository: `stefanpieter/hermes-vscode`
 Original repository (provenance only): `joaompfp/hermes-vscode`
 
@@ -16,7 +16,7 @@ The source transition is complete at `stefanpieter/hermes-vscode`; changes are n
 - The source is MIT licensed. The original copyright and permission notice must remain.
 - Upstream's last source push and Marketplace update were on 2026-04-06.
 - The upstream Marketplace listing is version 3.0.0.
-- The maintained successor candidate is version `3.6.0` and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
+- The maintained successor release is version `3.6.0` and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
 - A handover/co-maintenance proposal was posted on upstream PR #16 on 2026-07-24: https://github.com/joaompfp/hermes-vscode/pull/16#issuecomment-5073543397
 - The current `package.json` uses the separate successor Marketplace identity `stefanpieter.hermes-ai-agent-maintained`. The original `joaompfp.hermes-ai-agent` identity remains outside this project's authority and is referenced only for provenance, coexistence detection, and migration guidance.
 
@@ -115,20 +115,21 @@ Requirements:
 
 ## Phase 3 — public transition
 
-### Task 6: Release candidate
+Completed on 2026-08-11. Version `3.6.0` was published through the protected, secretless workload-identity workflow and independently verified at https://marketplace.visualstudio.com/items?itemName=stefanpieter.hermes-ai-agent-maintained. The maintainer installed the public release and accepted the documented non-migrating-state limitations; the original extension should now be uninstalled before normal successor use.
 
-- Complete independent code and security review.
-- After an authorised distribution identity exists, publish a GitHub pre-release with a checksum and migration warning.
-- Enable issues and private vulnerability reporting on the maintained repository.
-- Require pull requests and passing CI for `main`.
+### Task 6: Release candidate — completed
 
-### Task 7: Marketplace release
+- Completed independent code, security, package, and exact-tree review.
+- Published stable GitHub release `v3.6.0` with migration warnings after the controlled distribution identity was authorised.
+- Enabled issues and private vulnerability reporting on the maintained repository.
+- Required pull requests and passing CI for `main`.
 
-Only after identity and migration gates pass:
-- Publish under an authorised publisher.
-- Ensure all package links point to the canonical maintained repository.
-- Mark the relationship to the original project accurately.
-- Announce the supported migration and rollback process.
+### Task 7: Marketplace release — completed
+
+- Published under authorised publisher `stefanpieter` only after identity and migration gates passed.
+- Verified all package links point to the canonical maintained repository.
+- Described the relationship to the original project accurately while preserving MIT attribution.
+- Published the supported migration and rollback process.
 
 ## Acceptance criteria
 
