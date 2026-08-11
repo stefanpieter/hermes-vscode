@@ -2,9 +2,9 @@
 
 ## Authority
 
-The authorised maintained-successor Marketplace identity is `stefanpieter.hermes-ai-agent`. The original Marketplace publisher is `joaompfp`; no successor release may be published through that identity.
+The authorised maintained-successor Marketplace identity is `stefanpieter.hermes-ai-agent-maintained`. The original Marketplace publisher is `joaompfp`; no successor release may be published through that identity.
 
-Release artefacts must declare publisher `stefanpieter`, package name `hermes-ai-agent`, display name `Hermes AI Agent (Maintained)`, and the canonical repository links.
+Release artefacts must declare publisher `stefanpieter`, package name `hermes-ai-agent-maintained`, display name `Hermes AI Agent (Maintained)`, and the canonical repository links. Marketplace requires package names to be globally unique: the original listing already owns `hermes-ai-agent`, so the successor must not reuse it even under a different publisher.
 
 ### Publisher account record
 
@@ -36,7 +36,7 @@ git diff --check
 git status --short
 ```
 
-`npm run verify` produces `hermes-ai-agent-ci.vsix`. Record its SHA-256 using a platform-appropriate trusted tool and inspect the package listing emitted by `vsce ls`.
+`npm run verify` produces `hermes-ai-agent-maintained-ci.vsix`. Record its SHA-256 using a platform-appropriate trusted tool and inspect the package listing emitted by `vsce ls`.
 
 Verify at minimum:
 

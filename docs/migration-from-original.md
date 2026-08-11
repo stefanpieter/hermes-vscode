@@ -13,8 +13,8 @@ Original extension:
 Successor identity:
 
 - Marketplace publisher: `stefanpieter`
-- Extension name: `hermes-ai-agent`
-- Full extension ID: `stefanpieter.hermes-ai-agent`
+- Extension name: `hermes-ai-agent-maintained`
+- Full extension ID: `stefanpieter.hermes-ai-agent-maintained`
 - Display name: `Hermes AI Agent (Maintained)`
 
 ## Why migration is required

@@ -5,7 +5,7 @@ import test from 'node:test';
 import { validateMarketplaceRelease } from './validate-marketplace-release.mjs';
 
 const validPackage = {
-  name: 'hermes-ai-agent',
+  name: 'hermes-ai-agent-maintained',
   displayName: 'Hermes AI Agent (Maintained)',
   version: '3.5.3',
   publisher: 'stefanpieter',
@@ -31,10 +31,10 @@ const validEvent = {
 
 test('accepts an exact stable release and controlled successor identity', () => {
   assert.deepEqual(validateMarketplaceRelease(validEvent, validPackage), {
-    extensionId: 'stefanpieter.hermes-ai-agent',
+    extensionId: 'stefanpieter.hermes-ai-agent-maintained',
     tag: 'v3.5.3',
     version: '3.5.3',
-    vsixName: 'hermes-ai-agent-3.5.3.vsix',
+    vsixName: 'hermes-ai-agent-maintained-3.5.3.vsix',
   });
 });
 
@@ -147,6 +147,8 @@ test('release guidance uses the exact GitHub environment OIDC subject', () => {
   assert.match(releasing, /Other issuer/);
   assert.match(releasing, /accepts only `v\*` tags/);
   assert.match(releasing, /complete automatically after an authorised stable GitHub Release/);
+  assert.match(releasing, /Marketplace requires package names to be globally unique/);
+  assert.match(releasing, /`hermes-ai-agent-maintained`/);
   assert.doesNotMatch(releasing, /repo:[^`\s]+@\d+\//);
   assert.match(transitionPlan, /maintained successor candidate is version `3\.6\.0`/);
   assert.match(transitionPlan, /current `package\.json` uses the separate successor Marketplace identity/);
