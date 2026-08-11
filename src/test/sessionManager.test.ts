@@ -118,6 +118,123 @@ test('deduplicates concurrent session binding requests', async () => {
   assert.deepEqual(await Promise.all([first, second]), ['active-session', 'active-session']);
 });
 
+test('emits a session-bound registration when delegate_task dispatch completes', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'delegate-call-1',
+    title: 'delegate batch (2 tasks)',
+    status: 'running',
+  });
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'delegate-call-1',
+    status: 'completed',
+    content: [{
+      type: 'content',
+      content: {
+        type: 'text',
+        text: JSON.stringify({
+          status: 'dispatched',
+          delegation_id: 'deleg_abcdef12',
+          count: 2,
+          goals: ['First delegated task', 'Second delegated task'],
+          live_transcripts: [
+            '/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-0.log',
+            '/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-1.log',
+          ],
+        }),
+      },
+    }],
+  });
+
+  assert.deepEqual(events.at(-1)?.delegationRegistration, {
+    delegationId: 'deleg_abcdef12',
+    transcriptPaths: [
+      '/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-0.log',
+      '/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-1.log',
+    ],
+  });
+  assert.equal(events.at(-1)?.runtimeGeneration, manager.getRuntimeGeneration());
+});
+
+test('keeps a successful session-owned delegation registration after prompt cancellation', async () => {
+  const client = new FakeClient();
+  client.holdPrompt = true;
+  const { manager, events } = managerWithEvents(client);
+  const prompt = manager.sendPrompt('delegate work', '/tmp').catch((error: Error) => error.message);
+  await new Promise(resolve => setImmediate(resolve));
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'delegate-call-cancelled',
+    title: 'delegate task',
+    status: 'running',
+  });
+
+  await manager.cancel();
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'delegate-call-cancelled',
+    status: 'completed',
+    _meta: {
+      hermes: {
+        delegateTask: {
+          schemaVersion: 1,
+          status: 'dispatched',
+          delegationId: 'deleg_abcdef12',
+          taskCount: 1,
+          liveTranscripts: ['/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-0.log'],
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(events.at(-1)?.delegationRegistration, {
+    delegationId: 'deleg_abcdef12',
+    transcriptPaths: ['/tmp/.hermes/cache/delegation/live/deleg_abcdef12/task-0.log'],
+  });
+  assert.equal(events.at(-1)?.runtimeGeneration, manager.getRuntimeGeneration());
+  client.promptResolve?.();
+  assert.equal(await prompt, 'Cancelled');
+});
+
+test('does not trust delegate-shaped JSON from another tool', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'terminal-call-1',
+    title: 'terminal',
+    status: 'running',
+  });
+  client.emitUpdate('active-session', {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'terminal-call-1',
+    status: 'completed',
+    rawOutput: JSON.stringify({
+      status: 'dispatched',
+      delegation_id: 'deleg_deadbeef',
+      live_transcripts: ['/tmp/.hermes/cache/delegation/live/deleg_deadbeef/task-0.log'],
+    }),
+  });
+
+  assert.equal(events.at(-1)?.delegationRegistration, undefined);
+});
+
+test('advances the runtime generation when the ACP child exits', async () => {
+  const client = new FakeClient();
+  const { manager } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+  const generation = manager.getRuntimeGeneration();
+
+  client.emitExit();
+
+  assert.equal(manager.getRuntimeGeneration(), generation + 1);
+});
+
 test('reset invalidates an in-flight session binding', async () => {
   const client = new FakeClient();
   client.holdSessionNew = true;

@@ -966,3 +966,61 @@ test('persists an inactive session autonomous Lead response without seizing the 
     rmSync(storageRoot, { recursive: true, force: true });
   }
 });
+
+test('keeps Lead and canonical role chips while scoping delegated chips to the owning session generation', () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), 'hermes-vscode-delegation-activity-'));
+  const state = new Map<string, unknown>();
+  const context = {
+    globalStorageUri: { fsPath: storageRoot },
+    workspaceState: {
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown): Promise<void> => { state.set(key, value); },
+    },
+  };
+  let generation = 7;
+  const session = { getRuntimeGeneration: (): number => generation };
+
+  try {
+    const provider = new ChatPanelProvider(
+      { fsPath: '/extension' } as never,
+      session as never,
+      'test-model',
+      'test-version',
+      context as never,
+    );
+    const subject = provider as unknown as {
+      agentActivitiesBySession: Map<string, Array<{ id: string; name: string; status: string }>>;
+      workspaceRoleActivities: Array<{ id: string; name: string; status: string }>;
+      sessionDelegationActivities: Array<{ id: string; name: string; status: string }>;
+      sessionDelegationScope?: { sessionId: string; generation: number };
+      agentActivitiesFor(sessionId?: string): Array<{ id: string }>;
+    };
+    subject.agentActivitiesBySession.set('session-a', [
+      { id: 'primary', name: 'Lead / PM', status: 'idle' },
+    ]);
+    subject.workspaceRoleActivities = [
+      { id: 'role-run:validator', name: 'Technical Validator', status: 'running' },
+    ];
+    subject.sessionDelegationScope = { sessionId: 'session-a', generation: 7 };
+    subject.sessionDelegationActivities = [
+      { id: 'delegate-task:deleg_abcdef12:0', name: 'Delegate · Inspect candidate', status: 'running' },
+    ];
+
+    assert.deepEqual(subject.agentActivitiesFor('session-a').map(item => item.id), [
+      'primary',
+      'role-run:validator',
+      'delegate-task:deleg_abcdef12:0',
+    ]);
+    assert.deepEqual(subject.agentActivitiesFor('session-b').map(item => item.id), [
+      'role-run:validator',
+    ], 'foreign sessions must not receive delegated activity');
+
+    generation = 8;
+    assert.deepEqual(subject.agentActivitiesFor('session-a').map(item => item.id), [
+      'primary',
+      'role-run:validator',
+    ], 'a replaced ACP generation must hide delayed delegated activity without changing other chips');
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});

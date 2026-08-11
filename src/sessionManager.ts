@@ -35,6 +35,7 @@ import {
 } from './protocol';
 import { parseAgentActivities } from './agentActivity';
 import { parseAvailableCommandsUpdate } from './slashCommands';
+import { parseDelegateTaskRegistration } from './delegationActivityMonitor';
 
 export type PermissionRequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -55,6 +56,7 @@ export class SessionManager {
   /** Cancellation ownership for the one active turn, including session binding. */
   private activePromptTurn: PromptTurn | null = null;
   private readonly autonomousTurnsBySession = new Map<string, string>();
+  private readonly delegateToolCalls = new Set<string>();
   private nextPromptTurnId = 1;
 
   /** Session/generation currently replaying persisted history during session/load. */
@@ -109,6 +111,10 @@ export class SessionManager {
   /** Returns the current ACP session ID (for persistence by the caller). */
   getSessionId(): string | null {
     return this.sessionId;
+  }
+
+  getRuntimeGeneration(): number {
+    return this.bindingGeneration;
   }
 
   getEditApprovalMode(): EditApprovalModeId {
@@ -313,6 +319,7 @@ export class SessionManager {
     if (resumableSessionId) this.storedSessionId = resumableSessionId;
     this.accumulatedBySession.clear();
     this.autonomousTurnsBySession.clear();
+    this.delegateToolCalls.clear();
   }
 
   reset(): void {
@@ -324,6 +331,7 @@ export class SessionManager {
     this.storedSessionId = null;
     this.accumulatedBySession.clear();
     this.autonomousTurnsBySession.clear();
+    this.delegateToolCalls.clear();
   }
 
   private handleUpdate(params: Record<string, unknown>): void {
@@ -345,6 +353,7 @@ export class SessionManager {
     const kind = update.sessionUpdate as string;
     const event: SessionUpdateEvent = {
       session_id,
+      runtimeGeneration: this.bindingGeneration,
       replay: this.replayBinding?.sessionId === session_id,
     };
     const compressionCount = parseCompressionCount(update);
@@ -410,6 +419,13 @@ export class SessionManager {
         event.toolStatus = parsed.status;
         event.toolCallId = parsed.toolCallId;
         event.toolKind = parsed.kind;
+        if (parsed.toolCallId && (
+          parsed.title === 'delegate task'
+          || parsed.title.startsWith('delegate:')
+          || parsed.title.startsWith('delegate batch (')
+        )) {
+          this.delegateToolCalls.add(`${session_id}\0${parsed.toolCallId}`);
+        }
         if (parsed.locations.length) event.toolLocations = parsed.locations;
         if (parsed.detail) event.toolDetail = parsed.detail;
         if (parsed.todoState) {
@@ -420,11 +436,22 @@ export class SessionManager {
       }
 
       case 'tool_call_update': {
-        if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
+        const cancelledOwner = this.activePromptTurn?.cancelled === true
+          && this.activePromptTurn.sessionId === session_id;
         const parsed = parseToolCallUpdate(update);
         event.toolCallId = parsed.toolCallId;
         event.toolStatus = parsed.status;
         event.toolTitle = ''; // signal: update, not new call
+        const delegationKey = parsed.toolCallId ? `${session_id}\0${parsed.toolCallId}` : '';
+        if (delegationKey && this.delegateToolCalls.has(delegationKey)) {
+          if (parsed.status === 'completed') {
+            event.delegationRegistration = parseDelegateTaskRegistration(update);
+          }
+          if (parsed.status !== 'running' && parsed.status !== 'pending') {
+            this.delegateToolCalls.delete(delegationKey);
+          }
+        }
+        if (cancelledOwner && !event.delegationRegistration) return;
         if (parsed.backgroundProcess) event.backgroundProcess = parsed.backgroundProcess;
         if (parsed.todoState) {
           event.todoState = parsed.todoState;

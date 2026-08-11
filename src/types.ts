@@ -52,6 +52,11 @@ export interface BackgroundProcessState {
   exitCode?: number;
 }
 
+export interface DelegationRegistration {
+  delegationId: string;
+  transcriptPaths: string[];
+}
+
 export interface AutonomousTurnState {
   id: string;
   status: 'running' | 'completed' | 'failed';
@@ -60,6 +65,7 @@ export interface AutonomousTurnState {
 
 export interface SessionUpdateEvent {
   session_id: string;
+  runtimeGeneration?: number;
   text?: string;
   replay?: boolean;
   background?: boolean;
@@ -84,6 +90,7 @@ export interface SessionUpdateEvent {
   compressionCount?: number;
   availableCommands?: AvailableSlashCommand[];
   agentActivities?: AgentActivity[];
+  delegationRegistration?: DelegationRegistration;
 }
 
 export type SessionUpdateHandler = (event: SessionUpdateEvent) => void;
