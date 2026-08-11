@@ -201,6 +201,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           ...(event.compressionCount !== undefined ? { compressionCount: event.compressionCount } : {}),
         });
       }
+      if (event.sessionTitle && this.store.renameByAcpSessionId(event.session_id, event.sessionTitle)) {
+        this.broadcastSessions(this.store);
+      }
       if ((event.model || event.sessionTitle || event.contextUsed !== undefined || event.compressionCount !== undefined)
         && this.isActiveRuntimeSession(event.session_id)) {
         this.post({

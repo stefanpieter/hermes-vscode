@@ -14,6 +14,7 @@ The `v1.x` and `v2.x` lines used milestone-oriented versioning. From `v3.0.0` on
 
 ### Fixed
 
+- Persist semantic titles received from Hermes ACP into the matching saved session instead of leaving the opening-message fallback in the session list.
 - Prefer bounded Hermes ACP delegation metadata so large multi-task dispatches remain observable even when human-readable tool output is truncated, while retaining strict legacy parsing for older agents.
 - Preserve a successful, session-owned delegation registration when its initiating foreground prompt is cancelled after background dispatch.
 - Accept both current and producer-supported legacy delegation cache layouts with the same fail-closed path and symlink controls, and align the observable manifest envelope and Unicode character counting with Hermes Agent's explicit 100-worker, 500-character-goal safety ceiling.
