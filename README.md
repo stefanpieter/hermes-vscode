@@ -7,7 +7,7 @@ A VS Code sidebar client for [Hermes Agent](https://github.com/NousResearch/herm
 [`stefanpieter/hermes-vscode`](https://github.com/stefanpieter/hermes-vscode) is the canonical, actively maintained successor of the original `joaompfp/hermes-vscode` codebase. Development, issues, pull requests, security work, and source releases are managed here; the original repository is retained only as project provenance and is no longer a contribution target for this maintained line.
 
 - Joao Peixoto remains credited as the original author and copyright holder.
-- The maintained successor has registered the distinct Marketplace publisher `stefanpieter` and selected extension identity `stefanpieter.hermes-ai-agent` with display name **Hermes AI Agent (Maintained)**; publication remains gated on a verified automation credential.
+- The maintained successor uses the distinct Marketplace identity `stefanpieter.hermes-ai-agent-maintained` with display name **Hermes AI Agent (Maintained)**. The globally unique package name distinguishes it from the original extension, while verified workload-identity automation controls publication.
 - The original `joaompfp.hermes-ai-agent` Marketplace listing remains owned by its original publisher and is not this project's release channel.
 - Stable GitHub releases whose `vX.Y.Z` tag exactly matches `package.json` are verified and published automatically through the protected `marketplace-production` environment.
 
@@ -40,10 +40,10 @@ Use the current [Hermes Agent documentation](https://hermes-agent.nousresearch.c
 ```bash
 npm ci
 npm run verify
-code --install-extension hermes-ai-agent-ci.vsix
+code --install-extension hermes-ai-agent-maintained-ci.vsix
 ```
 
-The generated VSIX uses the maintained successor identity `stefanpieter.hermes-ai-agent`.
+The generated VSIX uses the maintained successor identity `stefanpieter.hermes-ai-agent-maintained`.
 
 Do not activate the original and maintained extensions together: they contribute the same Hermes commands, settings, and views. The maintained extension fails closed while `joaompfp.hermes-ai-agent` is installed. Uninstall or disable the original, then reload VS Code before using the maintained successor. VS Code settings remain under the existing `hermes.*` keys, but extension-scoped saved session-list state and trusted-binary approvals do not migrate to the new extension ID. Hermes's own persisted runtime sessions are not deleted by uninstalling the old VS Code extension.
 

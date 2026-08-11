@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const EXPECTED = Object.freeze({
   publisher: 'stefanpieter',
-  name: 'hermes-ai-agent',
+  name: 'hermes-ai-agent-maintained',
   displayName: 'Hermes AI Agent (Maintained)',
   repository: 'https://github.com/stefanpieter/hermes-vscode',
   homepage: 'https://github.com/stefanpieter/hermes-vscode',

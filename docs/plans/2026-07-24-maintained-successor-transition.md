@@ -1,7 +1,7 @@
 # Maintained successor transition plan
 
 Date: 2026-07-24
-Status: Source transition complete; successor distribution identity selected (`stefanpieter.hermes-ai-agent`), initial publication pending
+Status: Source transition complete; successor distribution identity selected (`stefanpieter.hermes-ai-agent-maintained`), initial publication pending
 Canonical repository: `stefanpieter/hermes-vscode`
 Original repository (provenance only): `joaompfp/hermes-vscode`
 
@@ -9,7 +9,7 @@ Original repository (provenance only): `joaompfp/hermes-vscode`
 
 Maintain a sustainable, transparent successor line for the Hermes VS Code extension without impersonating the original publisher, fragmenting users unnecessarily, or discarding the tested existing implementation.
 
-The source transition is complete at `stefanpieter/hermes-vscode`; changes are no longer submitted to the original repository. The maintained successor uses the separate Marketplace identity `stefanpieter.hermes-ai-agent`. The project does not use or claim authority over `joaompfp.hermes-ai-agent`.
+The source transition is complete at `stefanpieter/hermes-vscode`; changes are no longer submitted to the original repository. The maintained successor uses the separate, globally unique Marketplace identity `stefanpieter.hermes-ai-agent-maintained`. The project does not use or claim authority over `joaompfp.hermes-ai-agent`.
 
 ## Confirmed baseline
 
@@ -18,7 +18,7 @@ The source transition is complete at `stefanpieter/hermes-vscode`; changes are n
 - The upstream Marketplace listing is version 3.0.0.
 - The maintained successor candidate is version `3.6.0` and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
 - A handover/co-maintenance proposal was posted on upstream PR #16 on 2026-07-24: https://github.com/joaompfp/hermes-vscode/pull/16#issuecomment-5073543397
-- The current `package.json` uses the separate successor Marketplace identity `stefanpieter.hermes-ai-agent`. The original `joaompfp.hermes-ai-agent` identity remains outside this project's authority and is referenced only for provenance, coexistence detection, and migration guidance.
+- The current `package.json` uses the separate successor Marketplace identity `stefanpieter.hermes-ai-agent-maintained`. The original `joaompfp.hermes-ai-agent` identity remains outside this project's authority and is referenced only for provenance, coexistence detection, and migration guidance.
 
 ## Guardrails
 
