@@ -1,6 +1,6 @@
 # Migration from the original Marketplace extension
 
-Status: Design gate; implementation is required before a successor Marketplace release.
+Status: Successor identity selected; coexistence guard implemented; initial publication remains gated on explicit approval of non-migrating state.
 
 ## Identities
 
@@ -10,7 +10,12 @@ Original extension:
 - Extension name: `hermes-ai-agent`
 - Full extension ID: `joaompfp.hermes-ai-agent`
 
-Fallback successor identity: To be selected only after the handover decision and branding approval.
+Successor identity:
+
+- Marketplace publisher: `stefanpieter`
+- Extension name: `hermes-ai-agent`
+- Full extension ID: `stefanpieter.hermes-ai-agent`
+- Display name: `Hermes AI Agent (Maintained)`
 
 ## Why migration is required
 
@@ -43,7 +48,7 @@ Marketplace users can receive an exporter under the original identity only throu
 
 ## Coexistence policy
 
-The successor should detect `joaompfp.hermes-ai-agent` when both are installed and refuse to start ACP concurrently. It should present migration/uninstall guidance instead of allowing duplicate commands, views, child processes, or state writers.
+The successor detects `joaompfp.hermes-ai-agent` before registering commands, views, state writers, or starting ACP. If the original extension remains installed, successor activation fails closed and presents disable/uninstall and reload guidance.
 
 A successor release must use distinct extension, command, and view identifiers where coexistence cannot be prevented by VS Code. Configuration keys may remain `hermes.*` only after testing that uninstall/install and temporary coexistence do not corrupt settings.
 
@@ -58,6 +63,7 @@ A successor release must use distinct extension, command, and view identifiers w
 - multiple sessions with queued messages and ACP IDs
 - duplicate import, malformed JSON, oversized export, and interrupted import
 - successor rollback to the original or previous successor release
+- exact-ID coexistence guard with the original installed and absent
 
 ## Non-goals
 
@@ -68,4 +74,9 @@ A successor release must use distinct extension, command, and view identifiers w
 
 ## Release gate
 
-No fallback successor Marketplace release may be published until export/import, coexistence prevention, security review, and the above migration matrix have passed. If migration cannot be delivered, release notes must state the exact data that will not carry over and require explicit maintainer approval of that limitation.
+No successor Marketplace release may be published until coexistence prevention and security review have passed. Because an owner-authorised exporter cannot currently be delivered through the original identity, the initial release must state and receive explicit maintainer approval for these limitations:
+
+- VS Code UI conversation history stored as `hermes.sessions` does not carry over;
+- trusted-executable approvals stored as `hermes.approvedBinaries` do not carry over and must be granted again;
+- existing `hermes.*` settings remain available, but extension-scoped state does not;
+- Hermes Agent may still retain underlying ACP sessions, but the successor does not promise that the old UI entries remain discoverable or resumable.

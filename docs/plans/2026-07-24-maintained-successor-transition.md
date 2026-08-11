@@ -1,7 +1,7 @@
 # Maintained successor transition plan
 
 Date: 2026-07-24
-Status: Source transition complete; successor distribution identity unresolved
+Status: Source transition complete; successor distribution identity selected (`stefanpieter.hermes-ai-agent`), initial publication pending
 Canonical repository: `stefanpieter/hermes-vscode`
 Original repository (provenance only): `joaompfp/hermes-vscode`
 
@@ -9,7 +9,7 @@ Original repository (provenance only): `joaompfp/hermes-vscode`
 
 Maintain a sustainable, transparent successor line for the Hermes VS Code extension without impersonating the original publisher, fragmenting users unnecessarily, or discarding the tested existing implementation.
 
-The source transition is complete at `stefanpieter/hermes-vscode`; changes are no longer submitted to the original repository. Marketplace distribution remains a separate authority boundary. Any VSIX that retains `joaompfp.hermes-ai-agent` is restricted to local or explicitly private compatibility testing and must not be attached to a public release or published to a Marketplace without authority for that identity.
+The source transition is complete at `stefanpieter/hermes-vscode`; changes are no longer submitted to the original repository. The maintained successor uses the separate Marketplace identity `stefanpieter.hermes-ai-agent`. The project does not use or claim authority over `joaompfp.hermes-ai-agent`.
 
 ## Confirmed baseline
 

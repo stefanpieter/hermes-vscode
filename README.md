@@ -7,9 +7,9 @@ A VS Code sidebar client for [Hermes Agent](https://github.com/NousResearch/herm
 [`stefanpieter/hermes-vscode`](https://github.com/stefanpieter/hermes-vscode) is the canonical, actively maintained successor of the original `joaompfp/hermes-vscode` codebase. Development, issues, pull requests, security work, and source releases are managed here; the original repository is retained only as project provenance and is no longer a contribution target for this maintained line.
 
 - Joao Peixoto remains credited as the original author and copyright holder.
-- The original Marketplace listing remains owned by publisher `joaompfp`.
-- Builds from this repository must not be published through that publisher without explicit access and authorisation.
-- Any VSIX retaining the original Marketplace identity remains restricted to private compatibility testing until a controlled successor identity or publisher transfer is approved.
+- The maintained successor has registered the distinct Marketplace publisher `stefanpieter` and selected extension identity `stefanpieter.hermes-ai-agent` with display name **Hermes AI Agent (Maintained)**; publication remains gated on a verified automation credential.
+- The original `joaompfp.hermes-ai-agent` Marketplace listing remains owned by its original publisher and is not this project's release channel.
+- Stable GitHub releases whose `vX.Y.Z` tag exactly matches `package.json` are verified and published automatically through the protected `marketplace-production` environment.
 
 See the [governance policy](https://github.com/stefanpieter/hermes-vscode/blob/main/GOVERNANCE.md) and [transition plan](https://github.com/stefanpieter/hermes-vscode/blob/main/docs/plans/2026-07-24-maintained-successor-transition.md).
 
@@ -43,9 +43,9 @@ npm run verify
 code --install-extension hermes-ai-agent-ci.vsix
 ```
 
-The generated VSIX retains the original extension identity only for local compatibility testing. Do not publish it, upload it to the Marketplace, or attach it to a public release unless distribution authority for that identity has been obtained.
+The generated VSIX uses the maintained successor identity `stefanpieter.hermes-ai-agent`.
 
-Installing this VSIX replaces any Marketplace build with the same extension ID in that VS Code profile. Because the local version is newer than the current Marketplace release, automatic updates may not restore the Marketplace build. Record the installed version and keep a tested uninstall/reinstall or previous-VSIX rollback path before compatibility testing.
+Do not activate the original and maintained extensions together: they contribute the same Hermes commands, settings, and views. The maintained extension fails closed while `joaompfp.hermes-ai-agent` is installed. Uninstall or disable the original, then reload VS Code before using the maintained successor. VS Code settings remain under the existing `hermes.*` keys, but extension-scoped saved session-list state and trusted-binary approvals do not migrate to the new extension ID. Hermes's own persisted runtime sessions are not deleted by uninstalling the old VS Code extension.
 
 After installing or updating a VSIX, reload the VS Code window when no valuable ACP/background process is running.
 
