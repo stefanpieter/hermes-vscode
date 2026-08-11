@@ -64,6 +64,7 @@ jobs:
             exit 1
           fi
 
+          echo "::notice title=Marketplace publishing principal::$resource_id"
           {
             echo '## Marketplace publishing principal'
             echo
