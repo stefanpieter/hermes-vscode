@@ -129,3 +129,10 @@ test('identity bootstrap is manual, OIDC-scoped, environment-bound, and secretle
   assert.match(workflow, /499b84ac-1321-427f-aa17-267ca6975798/);
   assert.doesNotMatch(workflow, /VSCE_PAT|secrets\.|pull_request:|push:|release:/);
 });
+
+test('release guidance uses the exact GitHub environment OIDC subject', () => {
+  const releasing = fs.readFileSync(new URL('../docs/releasing.md', import.meta.url), 'utf8');
+  assert.match(releasing, /repo:stefanpieter\/hermes-vscode:environment:marketplace-production/);
+  assert.match(releasing, /Other issuer/);
+  assert.doesNotMatch(releasing, /repo:[^`\s]+@\d+\//);
+});
