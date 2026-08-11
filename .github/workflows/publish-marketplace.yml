@@ -1,0 +1,67 @@
+name: Publish to Visual Studio Marketplace
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: marketplace-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    name: Verify and publish
+    runs-on: ubuntu-latest
+    environment: marketplace-production
+    steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate release and extension identity
+        id: release
+        run: node scripts/validate-marketplace-release.mjs "$GITHUB_EVENT_PATH"
+
+      - name: Verify tag commit is on canonical main
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Run complete release gate
+        run: npm run verify
+
+      - name: Package exact Marketplace artefact
+        env:
+          VSIX_NAME: ${{ steps.release.outputs.vsix_name }}
+        run: npx vsce package --no-dependencies --out "$VSIX_NAME"
+
+      - name: Authenticate as Marketplace publishing identity
+        uses: Azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish controlled successor identity
+        env:
+          VSIX_NAME: ${{ steps.release.outputs.vsix_name }}
+        run: npx vsce publish --packagePath "$VSIX_NAME" --azure-credential --skip-duplicate --no-dependencies

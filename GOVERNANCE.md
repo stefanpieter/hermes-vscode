@@ -2,7 +2,7 @@
 
 ## Project status
 
-`stefanpieter/hermes-vscode` is the canonical source repository for this actively maintained successor project. It carries forward the MIT-licensed history of `joaompfp/hermes-vscode`, but the original repository is no longer this project's upstream contribution or merge target. This source-maintenance decision does not transfer the original Marketplace publisher account or authorise publication through it.
+`stefanpieter/hermes-vscode` is the canonical source repository for this actively maintained successor project. It carries forward the MIT-licensed history of `joaompfp/hermes-vscode`, but the original repository is no longer this project's upstream contribution or merge target. The successor may publish only through a verified `stefanpieter` Marketplace publisher; it does not use or claim control of the original publisher account.
 
 ## Principles
 

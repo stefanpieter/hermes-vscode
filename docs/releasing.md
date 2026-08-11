@@ -2,9 +2,19 @@
 
 ## Authority
 
-The original Marketplace publisher is `joaompfp`. No maintained-fork release may be published through that identity without explicit access and authorisation from its owner.
+The authorised maintained-successor Marketplace identity is `stefanpieter.hermes-ai-agent`. The original Marketplace publisher is `joaompfp`; no successor release may be published through that identity.
 
-Maintainers may publish source branches and verification summaries from the canonical repository. They must not attach a publicly downloadable VSIX that still declares the original publisher identity. A compatibility or bridge VSIX may be shared privately with explicit testers, with a clear warning that it is not a Marketplace release.
+Release artefacts must declare publisher `stefanpieter`, package name `hermes-ai-agent`, display name `Hermes AI Agent (Maintained)`, and the canonical repository links.
+
+### Publisher account record
+
+- Marketplace publisher ID: `stefanpieter`
+- Owner sign-in: `comesayhi@gmail.com` (personal Microsoft account / `live.com` identity)
+- Exact Marketplace user ID: stored in macOS Keychain under service `Hermes VS Code Marketplace Publisher`, account `stefanpieter`; it is intentionally not duplicated in this public repository
+
+The publisher record is established, but automated publish access is not complete until a Microsoft Entra workload identity has been federated to the GitHub `marketplace-production` environment and added as a member of publisher `stefanpieter`. The Keychain item above records the human owner identity only.
+
+Known setup issue observed on 2026-08-11: attempting to use this personal Microsoft account against the `Microsoft_Azure_Resources` application in the `Microsoft Services` tenant failed with `AADSTS50020` / `AADSTS16000` because the `live.com` identity was not a guest in that tenant. [Microsoft documents](https://learn.microsoft.com/en-us/troubleshoot/entra/entra-id/app-integration/error-code-aadsts50020-user-account-identity-provider-does-not-exist) this as expected when a personal Microsoft account reaches the Microsoft Services tenant without a linked directory. This is not evidence that the Marketplace publisher is missing. Long-term workload-identity setup requires a tenant and subscription controlled by the publisher owner; create those under the same personal account rather than changing the Marketplace identity.
 
 ## Release prerequisites
 
@@ -38,27 +48,44 @@ Verify at minimum:
 6. Hermes ACP can initialise, open/resume a session, stream a response, handle permissions, and complete background work.
 7. Upgrade and rollback behaviour match the release notes.
 
-## GitHub pre-release
+## GitHub release and automated Marketplace publication
 
-This step requires an authorised distribution identity. It is not permitted while the candidate still declares the original publisher without transfer or co-maintainer authorisation.
+Publishing a stable GitHub release triggers `.github/workflows/publish-marketplace.yml`. The workflow:
 
-- Tag the exact reviewed commit.
-- Attach the VSIX and a SHA-256 checksum file.
-- Include compatibility, migration, rollback, and known-limitations notes.
-- Mark it as a pre-release while the successor distribution identity is unresolved.
-- Never attach secrets or diagnostic state databases.
+- checks out the exact release tag;
+- rejects drafts, prereleases, non-semantic versions, identity drift, and tag/package-version mismatches;
+- requires the tagged commit to be on canonical `main`;
+- runs the complete release gate and packages the exact VSIX;
+- exchanges GitHub's short-lived OIDC token for the environment's Microsoft Entra publishing identity;
+- publishes through `vsce --azure-credential` without a stored publishing secret;
+- uses `--skip-duplicate` so a replay cannot create a second copy of the same version.
+
+The eligible tag is exactly `vX.Y.Z`, where `X.Y.Z` equals `package.json`'s stable version. GitHub prereleases are intentionally not Marketplace-published. Never attach secrets or diagnostic state databases.
 
 ## Marketplace release
 
-Marketplace publication additionally requires:
+Marketplace publication requires:
 
-- an authorised publisher account owned by the agreed maintainer/organisation
-- final extension ID, display name, repository, support, and security links
-- a tested migration from `joaompfp.hermes-ai-agent` if the ID changes
-- a clear statement of upstream/fork relationship
-- a final independent package review
+- publisher `stefanpieter` owned by the recorded Marketplace account;
+- a user-assigned managed identity added as a member of publisher `stefanpieter`;
+- a federated credential bound to GitHub owner `stefanpieter` (owner ID `65555837`), repository `hermes-vscode` (repository ID `1230785119`), environment `marketplace-production`, and audience `api://AzureADTokenExchange`;
+- environment variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` containing non-secret identity references;
+- final extension ID, display name, repository, support, and security links;
+- migration and coexistence warnings for `joaompfp.hermes-ai-agent` users;
+- a final independent package review.
 
-A publisher token must be stored only in the release platform's secret store. It must not appear in local config, repository files, shell history, logs, or release artefacts.
+### Long-term workload-identity setup
+
+The publishing path intentionally does not use a Marketplace PAT or client secret. Set it up once as follows:
+
+1. Create or select a Microsoft Entra tenant and Azure subscription controlled by the publisher owner. A paid monthly Azure plan is not required, but Azure may require payment-method verification before it creates the subscription.
+2. Create a dedicated resource group and user-assigned managed identity for Marketplace publishing.
+3. Add one federated credential using Azure's **GitHub Actions deploying Azure resources** scenario. In this form, **Organization** means the GitHub repository owner; a personal account is valid. Enter organization `stefanpieter`, organization ID `65555837`, repository `hermes-vscode`, repository ID `1230785119`, entity **Environment**, and environment `marketplace-production`. Keep issuer `https://token.actions.githubusercontent.com` and audience `api://AzureADTokenExchange`; let Azure generate the ID-bound subject identifier rather than editing it or choosing a branch-wide/repository-wide entity.
+4. Add the managed identity's client ID, tenant ID, and subscription ID as environment variables—not secrets—under GitHub environment `marketplace-production` using the exact names above.
+5. After the workflows are merged, create a temporary bootstrap tag matching the environment's `v*` deployment policy and manually run `Identify Marketplace publishing principal` at that tag. The workflow makes the official `https://app.vssps.visualstudio.com/_apis/profile/profiles/me` request while authenticated as the managed identity and places its Azure DevOps resource ID in the job summary without exposing a token. Add that resource ID as a member of Marketplace publisher `stefanpieter`, then delete the temporary tag.
+6. Keep GitHub environment deployment protection restricted to eligible release tags. The workflows request `id-token: write` only so GitHub can mint a short-lived, environment-bound OIDC token.
+
+The managed identity must be dedicated to publication and granted only the Azure access needed to establish its login context. Never add a PAT, client secret, session ID, federated token, or diagnostic authentication payload to GitHub variables, repository files, Keychain account records, logs, or release artefacts.
 
 ## Rollback
 

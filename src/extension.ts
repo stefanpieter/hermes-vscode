@@ -11,6 +11,7 @@ import { ChatPanelProvider } from './chatPanel';
 import { selectedPermissionResponse } from './permissionResponse';
 import { applyProfileSelection } from './profileSelection';
 import { ensureAcpClientStarted } from './connectionLifecycle';
+import { isOriginalExtensionInstalled, ORIGINAL_EXTENSION_ID } from './successorIdentity';
 import {
   EDIT_APPROVAL_MODES,
   EditApprovalModeId,
@@ -269,6 +270,14 @@ let client: AcpClient | null = null;
 let outputChannel: vscode.OutputChannel;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  if (isOriginalExtensionInstalled(extensionId => vscode.extensions.getExtension(extensionId))) {
+    void vscode.window.showErrorMessage(
+      `Hermes AI Agent (Maintained) is disabled while ${ORIGINAL_EXTENSION_ID} is installed. `
+      + 'Disable or uninstall the original extension, then reload VS Code.',
+    );
+    return;
+  }
+
   outputChannel = vscode.window.createOutputChannel('Hermes');
   context.subscriptions.push(outputChannel);
 
