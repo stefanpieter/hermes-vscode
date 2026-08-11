@@ -4,7 +4,7 @@
 
 The original Marketplace publisher is `joaompfp`. No maintained-fork release may be published through that identity without explicit access and authorisation from its owner.
 
-While handover is pending, maintainers may publish source branches and verification summaries. They must not attach a publicly downloadable VSIX that still declares the original publisher identity. A compatibility or bridge VSIX may be shared privately with explicit testers, with a clear warning that it is not an upstream or Marketplace release.
+Maintainers may publish source branches and verification summaries from the canonical repository. They must not attach a publicly downloadable VSIX that still declares the original publisher identity. A compatibility or bridge VSIX may be shared privately with explicit testers, with a clear warning that it is not a Marketplace release.
 
 ## Release prerequisites
 
@@ -45,7 +45,7 @@ This step requires an authorised distribution identity. It is not permitted whil
 - Tag the exact reviewed commit.
 - Attach the VSIX and a SHA-256 checksum file.
 - Include compatibility, migration, rollback, and known-limitations notes.
-- Mark it as a pre-release while distribution ownership is unresolved.
+- Mark it as a pre-release while the successor distribution identity is unresolved.
 - Never attach secrets or diagnostic state databases.
 
 ## Marketplace release

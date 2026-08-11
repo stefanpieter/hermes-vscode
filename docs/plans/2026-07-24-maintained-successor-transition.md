@@ -1,24 +1,24 @@
 # Maintained successor transition plan
 
 Date: 2026-07-24
-Status: In progress
-Interim canonical repository: `stefanpieter/hermes-vscode`
-Upstream repository: `joaompfp/hermes-vscode`
+Status: Source transition complete; successor distribution identity unresolved
+Canonical repository: `stefanpieter/hermes-vscode`
+Original repository (provenance only): `joaompfp/hermes-vscode`
 
 ## Objective
 
-Establish a sustainable, transparent maintenance line for the Hermes VS Code extension without impersonating the original publisher, fragmenting users unnecessarily, or discarding the tested existing implementation.
+Maintain a sustainable, transparent successor line for the Hermes VS Code extension without impersonating the original publisher, fragmenting users unnecessarily, or discarding the tested existing implementation.
 
-The preferred outcome is cooperative co-maintenance or transfer of the existing GitHub repository and Marketplace distribution. Until that is resolved, the maintained fork may publish source branches and verification summaries only. Any VSIX that retains `joaompfp.hermes-ai-agent` is restricted to local or explicitly private compatibility testing and must not be attached to a public release, published to a Marketplace, or presented as an upstream release.
+The source transition is complete at `stefanpieter/hermes-vscode`; changes are no longer submitted to the original repository. Marketplace distribution remains a separate authority boundary. Any VSIX that retains `joaompfp.hermes-ai-agent` is restricted to local or explicitly private compatibility testing and must not be attached to a public release or published to a Marketplace without authority for that identity.
 
 ## Confirmed baseline
 
 - The source is MIT licensed. The original copyright and permission notice must remain.
 - Upstream's last source push and Marketplace update were on 2026-04-06.
 - The upstream Marketplace listing is version 3.0.0.
-- The maintained line is version 3.3.0 and contains materially newer ACP lifecycle, permissions, profile, queue, and background-process support.
+- The maintained line is version 3.5.3 and contains materially newer ACP lifecycle, permissions, profile, queue, background-process, role-telemetry, delegation-activity, and semantic-title support.
 - A handover/co-maintenance proposal was posted on upstream PR #16 on 2026-07-24: https://github.com/joaompfp/hermes-vscode/pull/16#issuecomment-5073543397
-- The current `package.json` still uses the original Marketplace identity. It is valid only for local compatibility testing while handover is pending; it is not authorised for public publication by the maintained fork.
+- The current `package.json` still uses the original Marketplace identity. It is valid only for local compatibility testing and is not authorised for public publication by the successor project without distribution authority for that identity.
 
 ## Guardrails
 

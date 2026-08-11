@@ -4,12 +4,12 @@ A VS Code sidebar client for [Hermes Agent](https://github.com/NousResearch/herm
 
 ## Maintenance status
 
-This repository contains the actively maintained successor line of [`joaompfp/hermes-vscode`](https://github.com/joaompfp/hermes-vscode). A cooperative maintainership or ownership handover has been requested. Until that is resolved:
+[`stefanpieter/hermes-vscode`](https://github.com/stefanpieter/hermes-vscode) is the canonical, actively maintained successor of the original `joaompfp/hermes-vscode` codebase. Development, issues, pull requests, security work, and source releases are managed here; the original repository is retained only as project provenance and is no longer a contribution target for this maintained line.
 
 - Joao Peixoto remains credited as the original author and copyright holder.
 - The original Marketplace listing remains owned by publisher `joaompfp`.
 - Builds from this repository must not be published through that publisher without explicit access and authorisation.
-- Local candidate builds from this fork are development artefacts only. Any VSIX retaining the original identity remains restricted to private compatibility testing.
+- Any VSIX retaining the original Marketplace identity remains restricted to private compatibility testing until a controlled successor identity or publisher transfer is approved.
 
 See the [governance policy](https://github.com/stefanpieter/hermes-vscode/blob/main/GOVERNANCE.md) and [transition plan](https://github.com/stefanpieter/hermes-vscode/blob/main/docs/plans/2026-07-24-maintained-successor-transition.md).
 
@@ -43,7 +43,7 @@ npm run verify
 code --install-extension hermes-ai-agent-ci.vsix
 ```
 
-The generated VSIX retains the original extension identity only for local compatibility testing while handover is pending. Do not publish it, upload it to the Marketplace, or attach it to a public release.
+The generated VSIX retains the original extension identity only for local compatibility testing. Do not publish it, upload it to the Marketplace, or attach it to a public release unless distribution authority for that identity has been obtained.
 
 Installing this VSIX replaces any Marketplace build with the same extension ID in that VS Code profile. Because the local version is newer than the current Marketplace release, automatic updates may not restore the Marketplace build. Record the installed version and keep a tested uninstall/reinstall or previous-VSIX rollback path before compatibility testing.
 
