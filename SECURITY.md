@@ -7,7 +7,7 @@ Security fixes are developed against the current maintained branch. The original
 | Line | Status |
 |---|---|
 | Maintained default branch | Supported |
-| Latest `stefanpieter.hermes-ai-agent-maintained` Marketplace release, once published | Supported |
+| Latest `stefanpieter.hermes-ai-agent-maintained` Marketplace release (`3.6.0`) | Supported |
 | Latest maintained GitHub release | Supported |
 | Original `joaompfp` Marketplace release | Original-publisher-owned; not this project's release channel |
 | Older local VSIX builds | Unsupported |
