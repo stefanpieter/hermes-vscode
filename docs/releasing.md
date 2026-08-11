@@ -68,7 +68,7 @@ Marketplace publication requires:
 
 - publisher `stefanpieter` owned by the recorded Marketplace account;
 - a user-assigned managed identity added as a member of publisher `stefanpieter`;
-- a federated credential bound to GitHub owner `stefanpieter` (owner ID `65555837`), repository `hermes-vscode` (repository ID `1230785119`), environment `marketplace-production`, and audience `api://AzureADTokenExchange`;
+- a federated credential with issuer `https://token.actions.githubusercontent.com`, subject `repo:stefanpieter/hermes-vscode:environment:marketplace-production`, and audience `api://AzureADTokenExchange`;
 - environment variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` containing non-secret identity references;
 - final extension ID, display name, repository, support, and security links;
 - migration and coexistence warnings for `joaompfp.hermes-ai-agent` users;
@@ -80,7 +80,7 @@ The publishing path intentionally does not use a Marketplace PAT or client secre
 
 1. Create or select a Microsoft Entra tenant and Azure subscription controlled by the publisher owner. A paid monthly Azure plan is not required, but Azure may require payment-method verification before it creates the subscription.
 2. Create a dedicated resource group and user-assigned managed identity for Marketplace publishing.
-3. Add one federated credential using Azure's **GitHub Actions deploying Azure resources** scenario. In this form, **Organization** means the GitHub repository owner; a personal account is valid. Enter organization `stefanpieter`, organization ID `65555837`, repository `hermes-vscode`, repository ID `1230785119`, entity **Environment**, and environment `marketplace-production`. Keep issuer `https://token.actions.githubusercontent.com` and audience `api://AzureADTokenExchange`; let Azure generate the ID-bound subject identifier rather than editing it or choosing a branch-wide/repository-wide entity.
+3. Add one federated credential using Azure's **Other issuer** scenario. Set issuer `https://token.actions.githubusercontent.com`, subject identifier `repo:stefanpieter/hermes-vscode:environment:marketplace-production`, audience `api://AzureADTokenExchange`, and name `github-marketplace-production`. Do not use the GitHub-guided form if it generates an ID-bound subject containing numeric owner/repository IDs: GitHub Actions presents the standard environment-scoped subject above, and an ID-bound subject fails with `AADSTS700213`.
 4. Add the managed identity's client ID, tenant ID, and subscription ID as environment variables—not secrets—under GitHub environment `marketplace-production` using the exact names above.
 5. After the workflows are merged, create a temporary bootstrap tag matching the environment's `v*` deployment policy and manually run `Identify Marketplace publishing principal` at that tag. The workflow makes the official `https://app.vssps.visualstudio.com/_apis/profile/profiles/me` request while authenticated as the managed identity and places its Azure DevOps resource ID in the job summary without exposing a token. Add that resource ID as a member of Marketplace publisher `stefanpieter`, then delete the temporary tag.
 6. Keep GitHub environment deployment protection restricted to eligible release tags. The workflows request `id-token: write` only so GitHub can mint a short-lived, environment-bound OIDC token.
