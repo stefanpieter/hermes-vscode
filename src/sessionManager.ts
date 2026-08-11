@@ -340,17 +340,21 @@ export class SessionManager {
     const session_id = params.sessionId as string;
     const update = params.update as Record<string, unknown> | undefined;
     if (!session_id || !update) return;
+    const kind = update.sessionUpdate as string;
     const trackedAutonomousTurnId = this.autonomousTurnsBySession.get(session_id);
     if (session_id !== this.sessionId) {
       const meta = update['_meta'] as Record<string, unknown> | undefined;
       const hermesMeta = meta?.hermes as Record<string, unknown> | undefined;
-      if (hermesMeta?.backgroundNotification !== true && !trackedAutonomousTurnId) {
+      if (
+        kind !== 'session_info_update'
+        && hermesMeta?.backgroundNotification !== true
+        && !trackedAutonomousTurnId
+      ) {
         this.log(`[session] ignored update for inactive session ${session_id}`);
         return;
       }
     }
 
-    const kind = update.sessionUpdate as string;
     const event: SessionUpdateEvent = {
       session_id,
       runtimeGeneration: this.bindingGeneration,

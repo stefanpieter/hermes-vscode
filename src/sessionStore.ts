@@ -72,6 +72,11 @@ export class SessionStore {
     return true;
   }
 
+  renameByAcpSessionId(acpSessionId: string, newTitle: string): boolean {
+    const session = this.sessions.find(item => item.acpSessionId === acpSessionId);
+    return session ? this.rename(session.id, newTitle) : false;
+  }
+
   // ── Auto-title ─────────────────────────────────────
 
   /** Auto-title the active session from the first user message. Returns the new title or null. */

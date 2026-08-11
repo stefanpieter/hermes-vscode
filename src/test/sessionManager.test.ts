@@ -612,6 +612,20 @@ test('allows explicitly tagged completion for an inactive ACP session', async ()
   assert.equal(events.at(-1)?.text, 'hidden completion');
 });
 
+test('forwards semantic title updates for an inactive ACP session', async () => {
+  const client = new FakeClient();
+  const { manager, events } = managerWithEvents(client);
+  await manager.ensureSession('/tmp');
+
+  client.emitUpdate('inactive-session', {
+    sessionUpdate: 'session_info_update',
+    title: 'Semantic inactive title',
+  });
+
+  assert.equal(events.at(-1)?.session_id, 'inactive-session');
+  assert.equal(events.at(-1)?.sessionTitle, 'Semantic inactive title');
+});
+
 test('forwards the adapter advertised slash-command catalog', async () => {
   const client = new FakeClient();
   const { manager, events } = managerWithEvents(client);
