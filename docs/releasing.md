@@ -52,15 +52,17 @@ Verify at minimum:
 
 Publishing a stable GitHub release triggers `.github/workflows/publish-marketplace.yml`. The workflow:
 
-- checks out the exact release tag;
+- checks out the exact release tag in a verification job that cannot request an OIDC token;
+- admits the tag commit against canonical `main` before running Node setup, dependency lifecycle scripts, or repository validators;
 - rejects drafts, prereleases, non-semantic versions, identity drift, and tag/package-version mismatches;
-- requires the tagged commit to be on canonical `main`;
-- runs the complete release gate and packages the exact VSIX;
+- runs the complete release gate and packages and hashes the exact VSIX;
+- transfers that attested VSIX through pinned GitHub artifact actions to a separate environment-bound publish job;
+- rechecks the transferred SHA-256 before authentication;
 - exchanges GitHub's short-lived OIDC token for the environment's Microsoft Entra publishing identity;
-- publishes through `vsce --azure-credential` without a stored publishing secret;
+- publishes the transferred VSIX through an exact `@vscode/vsce` version and `--azure-credential`, without checking out or executing release-tag repository code in the token-capable job;
 - uses `--skip-duplicate` so a replay cannot create a second copy of the same version.
 
-The eligible tag is exactly `vX.Y.Z`, where `X.Y.Z` equals `package.json`'s stable version. GitHub prereleases are intentionally not Marketplace-published. Never attach secrets or diagnostic state databases.
+Within automatic publication, only the isolated publish job can request an OIDC token. The eligible tag is exactly `vX.Y.Z`, where `X.Y.Z` equals `package.json`'s stable version. GitHub prereleases are intentionally not Marketplace-published. Never attach secrets or diagnostic state databases.
 
 ## Marketplace release
 
