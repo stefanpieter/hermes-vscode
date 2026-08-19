@@ -101,21 +101,42 @@ test('rejects removal of the original MIT licence or author attribution', () => 
   }
 });
 
-test('workflow is release-only, OIDC-scoped, exact-tag, environment-scoped, and duplicate-safe', () => {
+test('workflow admits the canonical tag before release code and isolates OIDC publication', () => {
   const workflow = fs.readFileSync(new URL('../.github/workflows/publish-marketplace.yml', import.meta.url), 'utf8');
+  const verifyStart = workflow.indexOf('  verify:');
+  const publishStart = workflow.indexOf('  publish:');
+  assert.notEqual(verifyStart, -1);
+  assert.ok(publishStart > verifyStart);
+
+  const globalPolicy = workflow.slice(0, verifyStart);
+  const verifyJob = workflow.slice(verifyStart, publishStart);
+  const publishJob = workflow.slice(publishStart);
+  const ancestryCheck = verifyJob.indexOf('git merge-base --is-ancestor');
+
   assert.match(workflow, /release:\s*\n\s*types:\s*\[published\]/);
-  assert.match(workflow, /permissions:\s*\n\s*contents: read\s*\n\s*id-token: write/);
-  assert.match(workflow, /node-version: 22/);
-  assert.match(workflow, /environment: marketplace-production/);
-  assert.match(workflow, /ref: \$\{\{ github\.event\.release\.tag_name \}\}/);
-  assert.match(workflow, /node scripts\/validate-marketplace-release\.mjs/);
-  assert.match(workflow, /Azure\/login@[0-9a-f]{40}/);
-  assert.match(workflow, /client-id: \$\{\{ vars\.AZURE_CLIENT_ID \}\}/);
-  assert.match(workflow, /tenant-id: \$\{\{ vars\.AZURE_TENANT_ID \}\}/);
-  assert.match(workflow, /subscription-id: \$\{\{ vars\.AZURE_SUBSCRIPTION_ID \}\}/);
-  assert.match(workflow, /vsce publish .*--azure-credential.*--skip-duplicate/);
-  assert.doesNotMatch(workflow, /VSCE_PAT|secrets\./);
-  assert.doesNotMatch(workflow, /pull_request:|push:/);
+  assert.match(globalPolicy, /permissions:\s*\n\s*contents: read/);
+  assert.doesNotMatch(globalPolicy, /id-token: write/);
+  assert.match(verifyJob, /ref: \$\{\{ github\.event\.release\.tag_name \}\}/);
+  assert.notEqual(ancestryCheck, -1);
+  for (const releaseControlledCommand of ['actions/setup-node@', 'npm ci', 'node scripts/validate-marketplace-release.mjs']) {
+    assert.ok(ancestryCheck < verifyJob.indexOf(releaseControlledCommand), `${releaseControlledCommand} must run after ancestry admission`);
+  }
+  assert.doesNotMatch(verifyJob, /id-token: write|environment: marketplace-production|Azure\/login@/);
+  assert.match(verifyJob, /actions\/upload-artifact@[0-9a-f]{40}/);
+  assert.match(verifyJob, /sha256sum/);
+
+  assert.match(publishJob, /needs: verify/);
+  assert.match(publishJob, /permissions:\s*\n\s*id-token: write/);
+  assert.match(publishJob, /environment: marketplace-production/);
+  assert.match(publishJob, /actions\/download-artifact@[0-9a-f]{40}/);
+  assert.match(publishJob, /EXPECTED_VSIX_SHA256: \$\{\{ needs\.verify\.outputs\.vsix_sha256 \}\}/);
+  assert.match(publishJob, /Azure\/login@[0-9a-f]{40}/);
+  assert.match(publishJob, /client-id: \$\{\{ vars\.AZURE_CLIENT_ID \}\}/);
+  assert.match(publishJob, /tenant-id: \$\{\{ vars\.AZURE_TENANT_ID \}\}/);
+  assert.match(publishJob, /subscription-id: \$\{\{ vars\.AZURE_SUBSCRIPTION_ID \}\}/);
+  assert.match(publishJob, /@vscode\/vsce@3\.9\.2 publish .*--azure-credential.*--skip-duplicate/);
+  assert.doesNotMatch(publishJob, /actions\/checkout@|npm ci|npm run verify|node scripts\//);
+  assert.doesNotMatch(workflow, /VSCE_PAT|secrets\.|pull_request:|push:/);
 });
 
 test('identity bootstrap is manual, OIDC-scoped, environment-bound, and secretless', () => {
@@ -147,6 +168,7 @@ test('release guidance uses the exact GitHub environment OIDC subject', () => {
   assert.match(releasing, /Other issuer/);
   assert.match(releasing, /accepts only `v\*` tags/);
   assert.match(releasing, /complete automatically after an authorised stable GitHub Release/);
+  assert.match(releasing, /Within automatic publication, only the isolated publish job can request an OIDC token/);
   assert.match(releasing, /Marketplace requires package names to be globally unique/);
   assert.match(releasing, /`hermes-ai-agent-maintained`/);
   assert.doesNotMatch(releasing, /repo:[^`\s]+@\d+\//);
