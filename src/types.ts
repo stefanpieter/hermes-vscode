@@ -4,6 +4,8 @@
  */
 
 import type { SkillGroup } from './skillCatalog';
+import type { AcpModelState, ModelMenuGroup } from './modelCatalog';
+import type { AcpModeState } from './modeCatalog';
 import type { ProfileMenuItem } from './profileUi';
 import type { QueuedWebviewMessage } from './webviewQueue';
 import type { AgentActivity } from './agentActivity';
@@ -83,6 +85,10 @@ export interface SessionUpdateEvent {
   done?: boolean;
   error?: string;
   model?: string;
+  /** ACP SessionModelState: the authenticated inventory plus the current id. */
+  modelState?: AcpModelState;
+  /** ACP SessionModeState: the advertised edit-approval modes. */
+  modeState?: AcpModeState;
   sessionTitle?: string;
   contextUsed?: number;
   contextSize?: number;
@@ -101,7 +107,7 @@ export interface ToWebview {
   type:
     | 'append' | 'backgroundNotification' | 'thinking' | 'toolCall' | 'done'
     | 'error' | 'status' | 'notice' | 'clear' | 'busy' | 'queueState'
-    | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList';
+    | 'statusBar' | 'sessionList' | 'loadHistory' | 'profileList' | 'modelGroups';
   text?: string;
   toolName?: string;
   toolStatus?: string;
@@ -111,6 +117,7 @@ export interface ToWebview {
   toolLocations?: string[];
   todoState?: TodoState;
   backgroundProcesses?: BackgroundProcessState[];
+  modelGroups?: ModelMenuGroup[];
   status?: string;
   active?: boolean;
   queued?: number;

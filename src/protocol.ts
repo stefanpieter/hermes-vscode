@@ -6,7 +6,7 @@
  * this module owns parsing (extracting fields from wire format).
  */
 
-import type { AutonomousTurnState, BackgroundProcessState, SessionUpdateEvent, TodoState } from './types';
+import type { AutonomousTurnState, BackgroundProcessState, SessionUpdateEvent, TodoState, TodoItem } from './types';
 
 type RawUpdate = Record<string, unknown>;
 
@@ -249,3 +249,34 @@ export function parseSessionInfoUpdate(update: RawUpdate): string | null {
   const title = update.title as string | undefined;
   return title?.trim() || null;
 }
+
+/**
+ * Read ACP's native plan update into todo items.
+ *
+ * Hermes emits `sessionUpdate: "plan"` whenever its todo tool runs
+ * (`acp_adapter/events.py`), which is the first-class channel Zed renders as a
+ * task panel. Returns null when the update is not a plan, and an empty array
+ * for a plan with no entries, so the caller can clear rather than render an
+ * empty block.
+ */
+export function parsePlanUpdate(update: RawUpdate): TodoItem[] | null {
+  if (update.sessionUpdate !== 'plan') return null;
+
+  const entries = update.entries;
+  if (!Array.isArray(entries)) return null;
+
+  return entries.map(entry => {
+    const raw = entry as { content?: unknown; status?: unknown };
+    const status = String(raw.status ?? '');
+    return {
+      content: String(raw.content ?? ''),
+      // An unrecognised status still describes a real step, so it is kept as
+      // pending rather than dropped.
+      status: PLAN_STATUS.includes(status as TodoItem['status'])
+        ? (status as TodoItem['status'])
+        : 'pending',
+    };
+  });
+}
+
+const PLAN_STATUS: TodoItem['status'][] = ['pending', 'in_progress', 'completed', 'cancelled'];

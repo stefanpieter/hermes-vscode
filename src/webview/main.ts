@@ -22,6 +22,7 @@ import {
   formatToolDisplay, renderTodoOverlay, detectTodoUpdate,
   loadHistory, fmtTok,
 } from './renderers';
+import { renderModelMenu } from '../modelMenu';
 import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
   buildProfileMenu, setupProfileHandlers,
@@ -614,6 +615,18 @@ window.addEventListener('message', (e: MessageEvent) => {
       buildSlashCommandMenu(overflowMenu, S.availableCommands);
       renderAgentBar();
       break;
+
+    case 'modelGroups': {
+      // ACP advertised the real inventory; replace the menu that was baked in
+      // from the offline fallback, then re-resolve the active option so the
+      // header label matches a node that now exists.
+      const markup = renderModelMenu(msg.modelGroups ?? [], S.currentModel ?? '');
+      if (markup) {
+        modelMenu.innerHTML = markup;
+        updateStatusBar(S, statusEls, S.currentModel);
+      }
+      break;
+    }
 
     case 'statusBar': {
       updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
