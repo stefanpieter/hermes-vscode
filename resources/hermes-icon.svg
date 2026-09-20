@@ -1,15 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-  <!-- Sandal base -->
-  <path d="M5 18c0 1 2 2 7 2s7-1 7-2l-1-3H6z" fill="currentColor" opacity="0.15"/>
-  <path d="M5 18c0 1 2 2 7 2s7-1 7-2"/>
-  <path d="M6 15h12l1 3H5z"/>
-  <!-- Straps -->
-  <path d="M8 15v-3c0-1 1-2 4-2s4 1 4 2v3"/>
-  <path d="M9 12h6"/>
-  <!-- Wing left -->
-  <path d="M6 13c-3-2-5-5-4-7 1 1 3 2 5 3"/>
-  <path d="M5 11c-2-2-3-5-2-7 1 1 3 3 4 4"/>
-  <!-- Wing right -->
-  <path d="M18 13c3-2 5-5 4-7-1 1-3 2-5 3"/>
-  <path d="M19 11c2-2 3-5 2-7-1 1-3 3-4 4"/>
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <title>Hermes</title>
+  <!-- Hermes' caduceus, reduced to what survives 16px: one vertical staff and
+       two wings. The winged sandal was tried first and collapsed into a blob —
+       at this size a mark needs a strong dominant axis, not four small forms.
+
+       The colour is hardcoded rather than currentColor: nothing sets a text
+       colour in the editor title bar, so currentColor resolved to black and
+       the icon rendered as an unreadable silhouette. Claude Code and the
+       OpenAI extension both hardcode their brand colour here for the same
+       reason. -->
+  <g fill="#F5C542">
+    <!-- Staff: the vertical anchor that stays legible when scaled down -->
+    <rect x="10.8" y="4" width="2.4" height="17" rx="1.2"/>
+    <!-- Wings, one bold sweep each side -->
+    <path d="M10.4 7.2 3.4 4.3c-.7-.3-1.4.4-1.1 1.1 1 2.5 3.6 4.4 7.1 5.2l1-3.4z"/>
+    <path d="M13.6 7.2l7-2.9c.7-.3 1.4.4 1.1 1.1-1 2.5-3.6 4.4-7.1 5.2l-1-3.4z"/>
+    <!-- Head, so the staff reads as an object rather than a bare line -->
+    <circle cx="12" cy="3.4" r="2.1"/>
+  </g>
 </svg>

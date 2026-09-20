@@ -77,7 +77,9 @@ class BindingRaceClient {
     }
     if (method === 'session/load') {
       await new Promise<void>(resolve => { this.sessionLoadResolve = resolve; });
-      return {};
+      // A real LoadSessionResponse carries session fields; `{}` is what the
+      // adapter returns for a MISSING session.
+      return { models: { availableModels: [], currentModelId: 'test' } };
     }
     return {};
   }

@@ -1,9 +1,12 @@
+import type { ResolvedMention } from './mentions';
+
 export interface PromptSessionManager {
   sendPrompt(
     text: string,
     cwd: string,
     onSessionBound?: (sessionId: string) => void,
     beforeSessionBinding?: () => Promise<void>,
+    mentions?: ResolvedMention[],
   ): Promise<void>;
 }
 
@@ -21,8 +24,9 @@ export async function sendPromptWithSessionBinding(
   text: string,
   cwd: string,
   beforeSessionBinding?: () => Promise<void>,
+  mentions?: ResolvedMention[],
 ): Promise<void> {
   await session.sendPrompt(text, cwd, sessionId => {
     store.setAcpSessionId(sessionId);
-  }, beforeSessionBinding);
+  }, beforeSessionBinding, mentions);
 }

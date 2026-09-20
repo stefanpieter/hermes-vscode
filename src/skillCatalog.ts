@@ -1,6 +1,10 @@
 /**
- * Loads Hermes skills from ~/.hermes/skills/ directory tree.
- * Each skill is a directory with a SKILL.md file containing YAML frontmatter.
+ * Loads Hermes skills from the Hermes home directory.
+ *
+ * Each skill is a directory containing SKILL.md with YAML frontmatter. Two
+ * layouts are valid and both occur in a real install: a skill directly under
+ * `skills/` (`brandkit/SKILL.md`) and one nested under a category
+ * (`apple/apple-notes/SKILL.md`).
  */
 
 import * as fs from 'fs';
@@ -10,6 +14,7 @@ import * as path from 'path';
 export interface SkillEntry {
   name: string;
   description: string;
+  /** Category directory, or '' for a skill stored at the top level. */
   category: string;
 }
 
@@ -18,57 +23,102 @@ export interface SkillGroup {
   skills: SkillEntry[];
 }
 
-/** Scan ~/.hermes/skills/ and return grouped skills sorted alphabetically. */
-export function loadHermesSkills(): SkillGroup[] {
-  const skillsDir = path.join(os.homedir(), '.hermes', 'skills');
-  if (!fs.existsSync(skillsDir)) return [];
+/**
+ * Where Hermes keeps skills on this platform.
+ *
+ * Windows uses %LOCALAPPDATA%\hermes rather than ~/.hermes, so a homedir-only
+ * lookup silently found nothing and the skill menu was empty for every Windows
+ * user. HERMES_HOME wins when set, matching the agent's own resolution order.
+ */
+export function hermesSkillsDir(): string {
+  const explicit = process.env.HERMES_HOME;
+  if (explicit) return path.join(explicit, 'skills');
 
-  const groups: SkillGroup[] = [];
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA
+      ?? path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(localAppData, 'hermes', 'skills');
+  }
+
+  return path.join(os.homedir(), '.hermes', 'skills');
+}
+
+/** Read one SKILL.md, returning null when it is missing or unreadable. */
+function readSkill(dir: string, fallbackName: string, category: string): SkillEntry | null {
+  const skillMd = path.join(dir, 'SKILL.md');
+  if (!fs.existsSync(skillMd)) return null;
 
   try {
-    const categories = fs.readdirSync(skillsDir, { withFileTypes: true })
+    const content = fs.readFileSync(skillMd, 'utf8');
+    const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+    let name = fallbackName;
+    let description = '';
+
+    if (fmMatch) {
+      const nameMatch = /^name:\s*(.+)$/m.exec(fmMatch[1]);
+      const descMatch = /^description:\s*(.+)$/m.exec(fmMatch[1]);
+      if (nameMatch) name = nameMatch[1].trim();
+      if (descMatch) description = descMatch[1].trim();
+    }
+
+    return { name, description, category };
+  } catch {
+    return null;
+  }
+}
+
+/** Scan a skills root and return grouped skills sorted alphabetically. */
+export function readSkillsFrom(skillsDir: string): SkillGroup[] {
+  if (!fs.existsSync(skillsDir)) return [];
+
+  const byCategory = new Map<string, SkillEntry[]>();
+  const push = (entry: SkillEntry | null) => {
+    if (!entry) return;
+    const bucket = byCategory.get(entry.category) ?? [];
+    bucket.push(entry);
+    byCategory.set(entry.category, bucket);
+  };
+
+  try {
+    const top = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory())
       .map(d => d.name)
       .sort();
 
-    for (const cat of categories) {
-      const catDir = path.join(skillsDir, cat);
-      const skills: SkillEntry[] = [];
+    for (const entry of top) {
+      const dir = path.join(skillsDir, entry);
 
-      const entries = fs.readdirSync(catDir, { withFileTypes: true })
-        .filter(d => d.isDirectory());
-
-      for (const entry of entries) {
-        const skillMd = path.join(catDir, entry.name, 'SKILL.md');
-        if (!fs.existsSync(skillMd)) continue;
-
-        try {
-          const content = fs.readFileSync(skillMd, 'utf8');
-          const fmMatch = /^---\n([\s\S]*?)\n---/.exec(content);
-          let name = entry.name;
-          let description = '';
-
-          if (fmMatch) {
-            const nameMatch = /^name:\s*(.+)$/m.exec(fmMatch[1]);
-            const descMatch = /^description:\s*(.+)$/m.exec(fmMatch[1]);
-            if (nameMatch) name = nameMatch[1].trim();
-            if (descMatch) description = descMatch[1].trim();
-          }
-
-          skills.push({ name, description, category: cat });
-        } catch {
-          // Skip unreadable skills
-        }
+      // A SKILL.md here means the directory is the skill itself, not a
+      // category. Checked first: a category never carries one.
+      const flat = readSkill(dir, entry, '');
+      if (flat) {
+        push(flat);
+        continue;
       }
 
-      if (skills.length > 0) {
-        skills.sort((a, b) => a.name.localeCompare(b.name));
-        groups.push({ category: cat, skills });
+      try {
+        const nested = fs.readdirSync(dir, { withFileTypes: true })
+          .filter(d => d.isDirectory());
+        for (const child of nested) {
+          push(readSkill(path.join(dir, child.name), child.name, entry));
+        }
+      } catch {
+        // Unreadable category
       }
     }
   } catch {
     // Skills dir unreadable
   }
 
-  return groups;
+  return [...byCategory.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, skills]) => ({
+      category,
+      skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+}
+
+/** Scan the platform's Hermes skills directory. */
+export function loadHermesSkills(): SkillGroup[] {
+  return readSkillsFrom(hermesSkillsDir());
 }

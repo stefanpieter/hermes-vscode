@@ -13,6 +13,18 @@ export interface ModelMenuGroup {
   items: ModelMenuItem[];
 }
 
+/** One entry of ACP's `SessionModelState.available_models`. */
+export interface AcpModelInfo {
+  modelId?: string;
+  name?: string;
+}
+
+/** ACP `SessionModelState`, sent on session/new and session/load. */
+export interface AcpModelState {
+  availableModels?: AcpModelInfo[];
+  currentModelId?: string;
+}
+
 interface HermesModelRecord {
   id?: string;
   name?: string;
@@ -70,6 +82,86 @@ const FALLBACK_LABELS: Record<string, string> = {
   'gpt-5.3-codex-spark': 'GPT-5.3 Codex Spark',
 };
 
+const UNGROUPED = 'Models';
+/** Hermes renders inventory names as "<provider label> · <model>". */
+const NAME_SEPARATOR = ' · ';
+
+/**
+ * Split an inventory entry into its provider label and model label.
+ *
+ * Hermes builds ids as `<provider>:<model>` and names as
+ * `<provider label> · <model>`, so the human-readable provider label is already
+ * on the wire. Prefer it, fall back to the id prefix, and only then to a
+ * generic bucket — the picker never hardcodes a provider list.
+ */
+function splitEntry(entry: AcpModelInfo): { group: string; label: string } {
+  const id = (entry.modelId ?? '').trim();
+  const name = (entry.name ?? '').trim();
+
+  const separator = name.indexOf(NAME_SEPARATOR);
+  if (separator > 0) {
+    return {
+      group: name.slice(0, separator).trim(),
+      label: name.slice(separator + NAME_SEPARATOR.length).trim(),
+    };
+  }
+
+  const colon = id.indexOf(':');
+  if (colon > 0) {
+    return { group: id.slice(0, colon), label: name || id.slice(colon + 1) };
+  }
+
+  return { group: UNGROUPED, label: name || id };
+}
+
+/**
+ * Turn ACP's advertised inventory into picker groups.
+ *
+ * `command` is the advertised `modelId` verbatim: it is handed straight back to
+ * `session/set_model`, so it must round-trip untouched. Provider order follows
+ * the server's own ordering rather than being re-sorted here.
+ */
+export function buildModelGroups(state: AcpModelState | undefined): ModelMenuGroup[] {
+  const groups: ModelMenuGroup[] = [];
+  const byName = new Map<string, ModelMenuGroup>();
+
+  for (const entry of state?.availableModels ?? []) {
+    const id = (entry.modelId ?? '').trim();
+    if (!id) {
+      continue;
+    }
+
+    const { group: groupName, label } = splitEntry(entry);
+    let group = byName.get(groupName);
+    if (!group) {
+      group = { group: groupName, items: [] };
+      byName.set(groupName, group);
+      groups.push(group);
+    }
+
+    group.items.push({ id, label: label || id, command: id });
+  }
+
+  return groups;
+}
+
+/**
+ * Choose which inventory the picker shows.
+ *
+ * Live ACP state wins outright whenever it carries anything — it is the only
+ * source that knows about local, custom, and named-endpoint providers. The
+ * fallback covers the window before the first session/new response arrives.
+ * The two are never merged: appending a stale hardcoded list to the
+ * authoritative one would resurrect models the server did not offer.
+ */
+export function resolveModelGroups(
+  state: AcpModelState | undefined,
+  fallback: ModelMenuGroup[],
+): ModelMenuGroup[] {
+  const live = buildModelGroups(state);
+  return live.length > 0 ? live : fallback;
+}
+
 function readCache(): HermesModelCache | null {
   const cachePath = path.join(os.homedir(), '.hermes', 'models_dev_cache.json');
   try {
@@ -103,6 +195,12 @@ function buildGroup(
   };
 }
 
+/**
+ * Offline fallback used before any session has advertised its inventory.
+ *
+ * `buildModelGroups` is the real source once ACP replies; this keeps the picker
+ * populated during the window before the first session/new response arrives.
+ */
 export function loadHermesModelGroups(): ModelMenuGroup[] {
   const cache = readCache();
   const anthropic = cache?.anthropic?.models;

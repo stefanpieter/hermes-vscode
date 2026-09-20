@@ -9,12 +9,18 @@ import * as os from 'os';
 import * as path from 'path';
 import { SessionManager } from './sessionManager';
 import { SessionStore } from './sessionStore';
-import { loadHermesModelGroups, ModelMenuGroup } from './modelCatalog';
+import { loadHermesModelGroups, resolveModelGroups, ModelMenuGroup } from './modelCatalog';
+import { resolveModeOptions } from './modeCatalog';
+import { EDIT_APPROVAL_MODES, EditApprovalModeOption, normalizeEditApprovalMode } from './editApprovalMode';
 import { loadHermesSkills, SkillGroup } from './skillCatalog';
 import { buildChatHtml, escapeHtml } from './htmlTemplate';
 import { profileDisplayName } from './profileUi';
 import { BackgroundMessageAccumulator, routeBackgroundMessage } from './backgroundMessageAccumulator';
 import { sendPromptWithSessionBinding } from './promptSessionBinding';
+import { resolveMentions, findMentionCandidates } from './mentionResolver';
+import { parseMentions, splitMentionQuery } from './mentions';
+import { isToolFailure } from './protocol';
+import { matchSkillMentions, skillNamesFrom } from './skillMentions';
 import { sessionReadyUiMessages, sessionSwitchUiMessages } from './sessionSwitchUi';
 import type { SessionContextUsage } from './sessionSwitchUi';
 import { DEFAULT_AVAILABLE_COMMANDS, isKnownSlashCommand } from './slashCommands';
@@ -77,12 +83,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   private lifecycleTransition: Promise<void> | undefined;
 
   private readonly store: SessionStore;
-  private readonly modelGroups: ModelMenuGroup[] = loadHermesModelGroups();
+  private readonly fallbackModelGroups: ModelMenuGroup[] = loadHermesModelGroups();
+  private modelGroups: ModelMenuGroup[] = this.fallbackModelGroups;
+  /** Modes ACP advertised, or the built-in table until a session replies. */
+  private modeOptions: readonly EditApprovalModeOption[] = EDIT_APPROVAL_MODES;
   private readonly skillGroups: SkillGroup[] = loadHermesSkills();
 
   private selectedSkills: string[] = [];
   private attachedFiles: { name: string; path: string }[] = [];
-  private toolCallLocations = new Map<string, { kind: string; paths: string[] }>();
+  private toolCallLocations = new Map<string, { kind: string; paths: string[]; lines?: (number | undefined)[] }>();
   private readonly mediaRoot: string;
 
   constructor(
@@ -204,6 +213,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       if (event.sessionTitle && this.store.renameByAcpSessionId(event.session_id, event.sessionTitle)) {
         this.broadcastSessions(this.store);
       }
+      // ACP advertises the authenticated inventory on session/new. It is the
+      // only source that knows about local, custom, and named-endpoint
+      // providers, so it replaces the offline fallback as soon as it arrives.
+      if (event.modelState && this.isActiveRuntimeSession(event.session_id)) {
+        const resolved = resolveModelGroups(event.modelState, this.fallbackModelGroups);
+        if (resolved !== this.modelGroups) {
+          this.modelGroups = resolved;
+          this.post({ type: 'modelGroups', modelGroups: resolved });
+        }
+      }
+      // Modes are authoritative the same way: the built-in table matches what
+      // Hermes ships today and goes stale the moment a mode is added or renamed.
+      if (event.modeState && this.isActiveRuntimeSession(event.session_id)) {
+        this.modeOptions = resolveModeOptions(event.modeState);
+        this.broadcastModeState();
+      }
       if ((event.model || event.sessionTitle || event.contextUsed !== undefined || event.compressionCount !== undefined)
         && this.isActiveRuntimeSession(event.session_id)) {
         this.post({
@@ -255,20 +280,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
           if (event.toolStatus === 'completed' && event.toolCallId) {
             const info = this.toolCallLocations.get(event.toolCallId);
             if (info && info.paths.length > 0 && (info.kind === 'edit' || info.kind === 'read')) {
-              for (const filePath of info.paths) {
-                this.openFileInEditor(filePath, info.kind === 'edit');
-              }
+              info.paths.forEach((filePath, i) => {
+                this.openFileInEditor(filePath, info.kind === 'edit', info.lines?.[i]);
+              });
             }
             this.toolCallLocations.delete(event.toolCallId);
           }
         } else if (event.toolTitle) {
-          const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : event.toolStatus === 'error' ? '✗' : '⋯';
+          const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : isToolFailure(event.toolStatus) ? '✗' : '⋯';
           this.lastTurnTools.push({ role: 'tool', text: `${icon} ${event.toolTitle}${event.toolDetail ? ': ' + event.toolDetail : ''}` });
           // Store locations for file-open on completion
           if (event.toolCallId && event.toolLocations?.length && event.toolKind) {
             this.toolCallLocations.set(event.toolCallId, {
               kind: event.toolKind,
               paths: event.toolLocations,
+              lines: event.toolLocationLines,
             });
           }
           this.post({
@@ -277,12 +303,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
             toolStatus: event.toolStatus,
             toolCallId: event.toolCallId,
             toolDetail: event.toolDetail,
+            toolContent: event.toolContent,
             toolKind: event.toolKind,
             toolLocations: event.toolLocations,
+            toolLocationLines: event.toolLocationLines,
           });
         }
       }
       // Forward todo state updates to webview
+      if (event.userEcho) {
+        // A queued prompt the agent just started answering. Rendered as a user
+        // turn so the reply is not orphaned above an invisible question.
+        this.post({ type: 'userEcho', text: event.userEcho });
+      }
       if (event.todoState) {
         this.post({ type: 'statusBar', todoState: event.todoState });
       }
@@ -352,6 +385,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.contextUsageFor(active?.acpSessionId),
     )) this.post(update);
     this.broadcastProfileState();
+    this.broadcastModeState();
     this.broadcastSessions(this.store);
     if (active && active.messages.length > 0) {
       this.post({ type: 'loadHistory', history: active.messages, activeSessionId: this.store.activeId });
@@ -578,6 +612,29 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
       this.lastTurnText = '';
       this.lastTurnTools = [];
       await this.session.cancel();
+
+    } else if (msg.type === 'mentionQuery') {
+      // The webview has no vscode API, so file lookup happens here and the
+      // matches are posted back. Fire-and-forget: a stale reply is discarded by
+      // the webview when the query has already moved on.
+      const query = msg.query ?? '';
+      const split = splitMentionQuery(query);
+      const suggestions = split.kind === 'skill'
+        ? matchSkillMentions(this.skillGroups, split.term)
+        : await findMentionCandidates(split.term);
+      this.post({ type: 'mentionSuggestions', query, mentionSuggestions: suggestions });
+
+    } else if (msg.type === 'setMode' && msg.text) {
+      // The composer selector and the Command Palette both land here, so the
+      // mode is applied and broadcast once rather than diverging.
+      const cwd = this.resolveWorkingDirectory();
+      try {
+        await this.session.setEditApprovalMode(normalizeEditApprovalMode(msg.text), cwd);
+        this.log(`[ui] edit approval mode ${msg.text}`);
+      } catch (err) {
+        this.log(`[ui] mode change failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      this.broadcastModeState();
 
     } else if (msg.type === 'switchModel' && msg.model) {
       this.log(`[ui] switch model ${msg.model}`);
@@ -868,7 +925,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     if (event.toolTitle !== undefined) {
       captured = true;
       if (event.toolTitle) {
-        const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : event.toolStatus === 'error' ? '✗' : '⋯';
+        const icon = event.toolStatus === 'done' || event.toolStatus === 'completed' ? '✓' : isToolFailure(event.toolStatus) ? '✗' : '⋯';
         buffered.tools.push({
           role: 'tool',
           text: `${icon} ${event.toolTitle}${event.toolDetail ? ': ' + event.toolDetail : ''}`,
@@ -930,10 +987,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.log(`[ui] attached IDE context (${ctx.length} chars)`);
       }
 
-      // Inject the skills captured with this composer submission.
-      if (request.selectedSkills.length > 0) {
-        prompt = `I advise you to use the following skills: ${request.selectedSkills.join(', ')}\n\n${prompt}`;
-        this.log(`[ui] advised skills: ${request.selectedSkills.join(', ')}`);
+      // Inject the skills captured with this composer submission, plus any
+      // named inline with @skill:. Both routes end in the same advisory, so a
+      // mention is a shortcut for the toolbar menu rather than a new mechanism.
+      const mentionedSkills = skillNamesFrom(parseMentions(text));
+      const advisedSkills = [...new Set([...request.selectedSkills, ...mentionedSkills])];
+      if (advisedSkills.length > 0) {
+        prompt = `I advise you to use the following skills: ${advisedSkills.join(', ')}\n\n${prompt}`;
+        this.log(`[ui] advised skills: ${advisedSkills.join(', ')}`);
       }
 
       // Attach the file paths captured with this composer submission.
@@ -945,6 +1006,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     try {
+      // Mentions resolve against the workspace here, in the host: the webview
+      // has no vscode API. Each match becomes a resource_link Hermes reads from
+      // disk, so the prompt carries a URI rather than the file's contents.
+      const mentions = await resolveMentions(prompt);
+      if (mentions.length > 0) {
+        this.log(`[ui] resolved ${mentions.length} @mention(s)`);
+      }
+
       // SessionManager establishes turn cancellation ownership before binding,
       // including reconnect, while the binding callback persists ACP ownership
       // before session/prompt.
@@ -954,6 +1023,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
         prompt,
         cwd,
         async () => { await this.profileController?.ensureConnected?.(); },
+        mentions,
       );
     } catch (err) {
       const msg = String(err);
@@ -1011,16 +1081,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
   }
 
   /** Open a file in VS Code editor when Hermes edits/reads it. */
-  private openFileInEditor(filePath: string, isEdit: boolean): void {
+  private openFileInEditor(filePath: string, isEdit: boolean, line?: number): void {
     try {
       const uri = vscode.Uri.file(filePath);
       vscode.workspace.openTextDocument(uri).then(doc => {
+        // ACP reports the line the tool touched; without it every click lands
+        // at the top of the file. Clamped, since the file may have changed.
+        const target = typeof line === 'number' && line > 0
+          ? new vscode.Range(
+            Math.min(line - 1, Math.max(doc.lineCount - 1, 0)), 0,
+            Math.min(line - 1, Math.max(doc.lineCount - 1, 0)), 0)
+          : undefined;
         vscode.window.showTextDocument(doc, {
           preserveFocus: true,  // keep focus on the chat panel
           preview: !isEdit,     // edits open as persistent tabs, reads as preview
           viewColumn: vscode.ViewColumn.One,
+          selection: target,
         });
-        this.log(`[ui] opened ${isEdit ? 'edited' : 'read'} file ${path.basename(filePath)}`);
+        this.log(`[ui] opened ${isEdit ? 'edited' : 'read'} file ${path.basename(filePath)}${target ? `:${line}` : ''}`);
       }, err => {
         this.log(`[ui] failed to open file: ${err}`);
       });
@@ -1047,6 +1125,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, vscode.Dis
     return normalizedFile.startsWith(normalizedRoot) && allowedExt.has(path.extname(normalizedFile).toLowerCase());
   }
 
+
+  /**
+   * Modes the running agent advertised, or the built-in table before any
+   * session has replied. The Command Palette picker reads this so it lists
+   * what Hermes actually offers rather than a compiled-in copy.
+   */
+  public get editApprovalModeOptions(): readonly EditApprovalModeOption[] {
+    return this.modeOptions;
+  }
+
+  /**
+   * Push the mode list and current selection to the composer selector.
+   *
+   * Sent whenever the modes change (session/new advertises them) or the mode
+   * itself changes, so the button label never drifts from the real setting.
+   */
+  private broadcastModeState(): void {
+    this.post({
+      type: 'modeState',
+      modeOptions: this.modeOptions,
+      // Optional-called: a session that has not bound yet (and the test
+      // doubles) may not expose a mode, and the selector should still render
+      // its options rather than the panel failing to initialise.
+      activeMode: this.session.getEditApprovalMode?.(),
+    });
+  }
 
   public refreshProfileState(): void {
     this.broadcastProfileState();

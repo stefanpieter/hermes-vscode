@@ -19,9 +19,19 @@ import { primaryAgentActivity, shouldPulseComposer } from '../agentActivity';
 import { renderQueuedMessagesMarkup } from './queueControls';
 import {
   renderMarkdown, appendDiv, appendMessage, showWaiting,
-  formatToolDisplay, renderTodoOverlay, detectTodoUpdate,
+  formatToolDisplay, detectTodoUpdate,
   loadHistory, fmtTok,
 } from './renderers';
+import { renderModelMenu } from '../modelMenu';
+import { findMentionQuery, splitMentionQuery } from '../mentions';
+import type { MentionSuggestion } from '../mentions';
+import { applyMentionCompletion, moveMentionSelection, renderMentionOptions } from '../mentionPicker';
+import { findSlashQuery, matchSlashCommands } from '../slashPicker';
+import { renderPlanBlock } from '../planBlock';
+import { renderModeMenu, modeButtonLabel } from '../modeMenu';
+import { toolDensity, renderToolCard } from '../toolCard';
+import { isToolFailure } from '../protocol';
+import type { EditApprovalModeOption } from '../editApprovalMode';
 import {
   closeAllDropdowns, buildSessionPicker, setupSessionPickerHandlers,
   buildProfileMenu, setupProfileHandlers,
@@ -50,6 +60,10 @@ const queueItems       = document.getElementById('queue-items') as HTMLDivElemen
 const dragHandle       = document.getElementById('input-drag') as HTMLDivElement;
 const inputRow         = document.getElementById('input-row') as HTMLDivElement;
 const composer         = document.getElementById('composer') as HTMLDivElement;
+const mentionMenu      = document.getElementById('mention-menu') as HTMLDivElement;
+const modeBtn          = document.getElementById('mode-btn') as HTMLButtonElement;
+const modeBtnLabel     = document.getElementById('mode-btn-label')!;
+const modeMenu         = document.getElementById('mode-menu') as HTMLDivElement;
 const statusSessionEl  = document.getElementById('status-session') as HTMLButtonElement;
 const statusContextEl  = document.getElementById('status-context')!;
 const statusVersionEl  = document.getElementById('status-version')!;
@@ -66,7 +80,6 @@ const overflowMenu     = document.getElementById('overflow-menu') as HTMLDivElem
 const emptyState       = document.getElementById('empty-state') as HTMLDivElement;
 const sessionPicker    = document.getElementById('session-picker') as HTMLDivElement;
 const logoMark         = document.getElementById('logo-mark')!;
-const todoOverlay      = document.getElementById('todo-overlay')!;
 const backgroundProcessStatus = document.getElementById('background-process-status')!;
 const skillsBtn        = document.getElementById('skills-btn') as HTMLButtonElement;
 const skillsMenu       = document.getElementById('skills-menu') as HTMLDivElement;
@@ -81,7 +94,7 @@ inputEl.disabled = true;
 sendBtn.disabled = true;
 queueBtn.disabled = true;
 
-const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profileMenu, cmdArgPopover };
+const dropdownEls = { modelMenu, sessionPicker, skillsMenu, overflowMenu, profileMenu, cmdArgPopover, modeMenu };
 const statusEls = { statusVersionEl, modelBtnHeader, modelMenu, statusSessionEl, statusContextEl, ctxBarWrap, ctxBar, ctxBarFresh };
 const closeFn = () => closeAllDropdowns(dropdownEls);
 
@@ -394,7 +407,164 @@ stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
 queueBtn.addEventListener('click', send);
 sendBtn.addEventListener('click', send);
 inputEl.addEventListener('keydown', (e) => {
+  // The mention picker owns navigation keys while it is open, so Enter
+  // accepts a file instead of sending a half-typed message.
+  if (mentionOpen) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionSelected = moveMentionSelection(
+        mentionSelected, mentionItems.length, e.key === 'ArrowDown' ? 'down' : 'up');
+      paintMentionMenu();
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      acceptMention(mentionItems[mentionSelected]);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMentionMenu();
+      return;
+    }
+  }
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// ── Mention picker ───────────────────────────────────
+
+let mentionOpen = false;
+let mentionItems: MentionSuggestion[] = [];
+let mentionSelected = 0;
+let mentionStart = 0;
+/** Which catalogue the open popup is showing. */
+let mentionKind: 'mention' | 'slash' = 'mention';
+/** Query the open menu is showing, so a slower reply for an older one is dropped. */
+let mentionQuery = '';
+
+function closeMentionMenu(): void {
+  mentionOpen = false;
+  mentionItems = [];
+  mentionSelected = 0;
+  mentionMenu.style.display = 'none';
+}
+
+function paintMentionMenu(): void {
+  if (mentionItems.length === 0) { closeMentionMenu(); return; }
+  const hint = mentionKind === 'slash'
+    ? '<div class="mention-hint">commands</div>'
+    : splitMentionQuery(mentionQuery).kind === 'file'
+      ? '<div class="mention-hint">files &middot; type <b>skill:</b> for skills</div>'
+      : '<div class="mention-hint">skills</div>';
+  mentionMenu.innerHTML = hint + renderMentionOptions(mentionItems, mentionSelected);
+  mentionMenu.style.display = 'block';
+  mentionMenu.querySelector('.mention-option.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function acceptMention(suggestion: MentionSuggestion | undefined): void {
+  if (!suggestion) { closeMentionMenu(); return; }
+
+  if (mentionKind === 'slash') {
+    // A slash command is the whole message, so it replaces the text outright
+    // rather than splicing into it. The trailing space lets arguments follow.
+    inputEl.value = `/${suggestion.mention} `;
+    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    closeMentionMenu();
+    inputEl.focus();
+    return;
+  }
+
+  const applied = applyMentionCompletion({
+    text: inputEl.value,
+    start: mentionStart,
+    caret: inputEl.selectionStart ?? inputEl.value.length,
+    mention: suggestion.mention,
+  });
+  inputEl.value = applied.text;
+  inputEl.setSelectionRange(applied.caret, applied.caret);
+  closeMentionMenu();
+  inputEl.focus();
+}
+
+/**
+ * Place the plan inline, so it belongs to the turn that produced it and
+ * scrolls away with it. The old floating overlay pinned above the composer
+ * showed a plan from ten turns ago as if it were still current.
+ *
+ * One block per turn: an updated plan replaces its own rather than stacking
+ * near-identical checklists down the transcript.
+ */
+function showPlan(todos: TodoItem[]): void {
+  const html = renderPlanBlock(todos);
+  if (!html) return;
+  const last = messagesEl.lastElementChild;
+  const host = last?.classList.contains('plan-wrap')
+    ? (last as HTMLElement)
+    : appendDiv(messagesEl, 'msg plan-wrap');
+  host.innerHTML = html;
+  autoScroll();
+}
+
+// ── Mode selector ────────────────────────────────────
+
+let modeOptions: readonly EditApprovalModeOption[] = [];
+let activeModeId = '';
+
+modeBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = modeMenu.style.display === 'block';
+  closeAllDropdowns(dropdownEls);
+  if (open) return;
+  modeMenu.innerHTML = renderModeMenu(modeOptions, activeModeId);
+  modeMenu.style.display = 'block';
+});
+
+modeMenu.addEventListener('click', (e) => {
+  const option = (e.target as HTMLElement).closest<HTMLElement>('.mode-option');
+  const mode = option?.dataset.mode;
+  if (!mode) return;
+  e.stopPropagation();
+  modeMenu.style.display = 'none';
+  // The host owns the mode and echoes it back via modeState, so the button
+  // reflects what actually took effect rather than what was clicked.
+  vscode.postMessage({ type: 'setMode', text: mode });
+});
+
+function refreshMentionMenu(): void {
+  // A leading `/` opens the command palette; `@` opens files or skills. Both
+  // render in the same popup, so only the source of the items differs.
+  const slash = findSlashQuery(inputEl.value, inputEl.selectionStart ?? 0);
+  if (slash) {
+    mentionOpen = true;
+    mentionKind = 'slash';
+    mentionStart = 0;
+    mentionQuery = slash.query;
+    mentionItems = matchSlashCommands(S.availableCommands, slash.query);
+    mentionSelected = 0;
+    paintMentionMenu();
+    return;
+  }
+
+  const found = findMentionQuery(inputEl.value, inputEl.selectionStart ?? 0);
+  if (!found) { closeMentionMenu(); return; }
+  mentionOpen = true;
+  mentionKind = 'mention';
+  mentionStart = found.start;
+  mentionQuery = found.query;
+  vscode.postMessage({ type: 'mentionQuery', query: found.query });
+}
+
+inputEl.addEventListener('input', refreshMentionMenu);
+// Clicking or arrowing out of the mention closes it; `input` alone misses that.
+inputEl.addEventListener('click', refreshMentionMenu);
+inputEl.addEventListener('blur', () => setTimeout(closeMentionMenu, 120));
+
+mentionMenu.addEventListener('mousedown', (e) => {
+  // mousedown, not click: blur would close the menu before click landed.
+  e.preventDefault();
+  const option = (e.target as HTMLElement).closest<HTMLElement>('.mention-option');
+  const mention = option?.dataset.mention;
+  if (mention) acceptMention(mentionItems.find(item => item.mention === mention));
 });
 
 queueItems.addEventListener('click', (e) => {
@@ -447,6 +617,15 @@ window.addEventListener('message', (e: MessageEvent) => {
   const msg = e.data as ToWebview;
 
   switch (msg.type) {
+    case 'userEcho': {
+      // A queued prompt the agent just began answering: render it as a user
+      // turn so the reply that follows is not orphaned.
+      if (S.pendingText) flushPending();
+      appendMessage(messagesEl, 'user', msg.text ?? '');
+      autoScroll();
+      break;
+    }
+
     case 'append':
       S.pendingText += msg.text ?? '';
       scheduleFlush();
@@ -473,7 +652,7 @@ window.addEventListener('message', (e: MessageEvent) => {
         const existing = document.querySelector(`[data-tool-id="${msg.toolCallId}"]`);
         if (existing) {
           const isDone = msg.toolStatus === 'done' || msg.toolStatus === 'completed';
-          const isError = msg.toolStatus === 'error';
+          const isError = isToolFailure(msg.toolStatus);
           const statusEl = existing.querySelector('.tool-status');
           if (statusEl) {
             statusEl.textContent = isDone ? '✓' : isError ? '✗' : '⋯';
@@ -487,14 +666,32 @@ window.addEventListener('message', (e: MessageEvent) => {
       S.currentAgentEl = null; S.currentAgentText = '';
       document.getElementById('waiting')?.remove();
       const isDone = msg.toolStatus === 'done' || msg.toolStatus === 'completed';
-      const isError = msg.toolStatus === 'error';
+      const isError = isToolFailure(msg.toolStatus);
       const statusIcon = isDone ? '✓' : isError ? '✗' : '⋯';
       const statusClass = isDone ? ' done' : isError ? ' error' : '';
       const toolEl = appendDiv(messagesEl, 'msg tool');
       if (msg.toolCallId) toolEl.dataset.toolId = msg.toolCallId;
       const { label, info } = formatToolDisplay(msg.toolName ?? '', msg.toolKind, msg.toolLocations, msg.toolDetail);
-      const infoHtml = info ? `<span class="tool-detail">${DOMPurify.sanitize(info)}</span>` : '';
-      toolEl.innerHTML = `<span class="tool-status${statusClass}">${statusIcon}</span><span class="tool-name">${label}</span>${infoHtml}`;
+      const body = msg.toolContent ?? '';
+
+      // Two densities: a call whose output matters gets a card with the
+      // content inline; a quick lookup stays a single flat row.
+      if (toolDensity({ label, body }) === 'card') {
+        toolEl.className = 'msg tool-wrap';
+        toolEl.innerHTML = renderToolCard({
+          label,
+          target: info,
+          status: isDone ? '' : (msg.toolStatus ?? ''),
+          body,
+          state: isError ? 'error' : isDone ? 'done' : 'running',
+        });
+        toolEl.querySelector('.tool-card-h')?.addEventListener('click', () => {
+          toolEl.querySelector('.tool-card')?.classList.toggle('collapsed');
+        });
+      } else {
+        const infoHtml = info ? `<span class="tool-detail">${DOMPurify.sanitize(info)}</span>` : '';
+        toolEl.innerHTML = `<span class="tool-status${statusClass}">${statusIcon}</span><span class="tool-name">${label}</span>${infoHtml}`;
+      }
       autoScroll();
       break;
     }
@@ -557,7 +754,8 @@ window.addEventListener('message', (e: MessageEvent) => {
           S.currentAgentEl.classList.remove('agent');
           S.currentAgentEl.classList.add('system');
         } else {
-          detectTodoUpdate(S.currentAgentText, todoOverlay);
+          const scraped = detectTodoUpdate(S.currentAgentText);
+          if (scraped) showPlan(scraped);
         }
         renderMarkdown(S.currentAgentEl, S.currentAgentText);
         autoScroll();
@@ -615,6 +813,42 @@ window.addEventListener('message', (e: MessageEvent) => {
       renderAgentBar();
       break;
 
+    case 'mentionSuggestions': {
+      // Drop a reply that arrived after the query moved on, once the picker
+      // closed, or while a slash palette is showing — otherwise a slow file
+      // lookup reopens a stale menu or overwrites the command list.
+      if (!mentionOpen || mentionKind !== 'mention' || msg.query !== mentionQuery) break;
+      mentionItems = msg.mentionSuggestions ?? [];
+      mentionSelected = 0;
+      paintMentionMenu();
+      break;
+    }
+
+    case 'modeState': {
+      modeOptions = msg.modeOptions ?? [];
+      activeModeId = msg.activeMode ?? '';
+      modeBtnLabel.textContent = modeButtonLabel(modeOptions, activeModeId);
+      // Drives the dot colour: the CSS keys off this attribute.
+      modeBtn.dataset.mode = activeModeId;
+      // Keep an open menu in sync rather than showing a stale checkmark.
+      if (modeMenu.style.display === 'block') {
+        modeMenu.innerHTML = renderModeMenu(modeOptions, activeModeId);
+      }
+      break;
+    }
+
+    case 'modelGroups': {
+      // ACP advertised the real inventory; replace the menu that was baked in
+      // from the offline fallback, then re-resolve the active option so the
+      // header label matches a node that now exists.
+      const markup = renderModelMenu(msg.modelGroups ?? [], S.currentModel ?? '');
+      if (markup) {
+        modelMenu.innerHTML = markup;
+        updateStatusBar(S, statusEls, S.currentModel);
+      }
+      break;
+    }
+
     case 'statusBar': {
       updateStatusBar(S, statusEls, msg.model, msg.sessionTitle, msg.contextUsed, msg.contextSize, msg.version, msg.cachedTokens);
       if (msg.compressionCount !== undefined) S.currentCompressionCount = msg.compressionCount;
@@ -649,7 +883,7 @@ window.addEventListener('message', (e: MessageEvent) => {
       }
       if (msg.todoState && typeof msg.todoState === 'object') {
         const state = msg.todoState as { todos?: TodoItem[] };
-        if (state.todos) renderTodoOverlay(todoOverlay, state.todos);
+        if (state.todos) showPlan(state.todos);
       }
       if (msg.contextAnnotation) {
         const userMsgs = messagesEl.querySelectorAll('.msg.user');

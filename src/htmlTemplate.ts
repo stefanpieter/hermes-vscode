@@ -124,9 +124,9 @@ ${CSS_TEMPLATE}
     </div>
   </div>
   <div id="background-process-status"></div>
-  <div id="todo-overlay"></div>
   <div id="input-drag"></div>
   <div id="composer">
+  <div id="mention-menu" style="display:none"></div>
   <div id="context-row">
     <div id="attach-chip"></div>
   </div>
@@ -156,6 +156,12 @@ ${CSS_TEMPLATE}
     <div id="logo-mark"><img src="${logoUri}" alt="Hermes"/></div>
     <div class="bar-spacer"></div>
     <div id="input-btns">
+      <div class="btn-wrap">
+        <button class="cmd-btn mode-btn" id="mode-btn" title="Edit approval mode">
+          <span class="mode-dot"></span><span id="mode-btn-label">Edits</span><span class="mode-cv">▾</span>
+        </button>
+        <div id="mode-menu" style="display:none"></div>
+      </div>
       <div id="action-area">
         <button id="send-btn">Send</button>
         <div id="busy-btns">
@@ -271,6 +277,60 @@ const CSS_TEMPLATE = /* css */ `
     }
     #status-context.warn { color: var(--gold); opacity: 1; }
     #status-context.crit { color: #C94040; opacity: 1; }
+    /* ── Mode selector ───────────────────────────────
+       Sits beside Send because it decides whether Hermes asks before
+       editing — worth seeing while typing, not buried in a palette. */
+    .mode-btn {
+      display: flex; align-items: center; gap: 4px;
+      padding: 3px 7px; font-size: 0.78em;
+      font-family: var(--ui-font); white-space: nowrap;
+      /* Never let the label slide under Send: the bar is tight in a narrow
+         sidebar, and a clipped "Edits: Defau" reads as a rendering fault. */
+      flex-shrink: 0; max-width: 42%; overflow: hidden;
+    }
+    #mode-btn-label { overflow: hidden; text-overflow: ellipsis; }
+    .mode-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--gold); flex-shrink: 0;
+    }
+    /* The dot carries the risk, not just decoration: green when Hermes asks
+       before touching a file, amber once it stops asking. */
+    .mode-btn[data-mode="default"] .mode-dot {
+      background: var(--vscode-gitDecoration-addedResourceForeground, #89d185);
+    }
+    .mode-btn[data-mode="dont_ask"] .mode-dot,
+    .mode-btn[data-mode="accept_edits"] .mode-dot {
+      background: var(--gold);
+    }
+    .mode-cv { opacity: 0.5; font-size: 0.85em; }
+    #mode-menu {
+      position: absolute; bottom: 100%; right: 0;
+      margin-bottom: 4px; min-width: 190px; z-index: 220;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, rgba(128,128,128,0.35));
+      border-radius: 6px; overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    }
+    .mode-option {
+      padding: 6px 10px; cursor: pointer;
+      font-family: var(--ui-font); font-size: 0.82em;
+    }
+    .mode-option:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)); }
+    .mode-option.active .mode-name { color: var(--gold); font-weight: 600; }
+    .mode-option.active .mode-name::before { content: '✓ '; }
+    .mode-name { display: block; }
+    .mode-desc {
+      display: block; margin-top: 1px;
+      font-size: 0.85em; opacity: 0.55;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    /* Prompt-cache share: a cost signal, so it sits quietly beside the
+       window headline rather than competing with it. */
+    .tok-cache {
+      opacity: 0.55; font-size: 0.92em;
+      color: var(--vscode-gitDecoration-addedResourceForeground, #89d185);
+    }
 
     #agent-activity-bar {
       display: flex; align-items: center; gap: 5px;
@@ -389,11 +449,14 @@ const CSS_TEMPLATE = /* css */ `
       align-self: flex-end;
       max-width: 88%;
       white-space: pre-wrap;
-      background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.15));
-      border-left: 3px solid var(--gold);
+      /* Subtle blue bubble so a user turn is distinguishable at a glance.
+         Agent turns stay flat: they interleave text, tool cards and plan
+         blocks, and wrapping those would nest boxes inside boxes. */
+      background: var(--vscode-inputOption-activeBackground, rgba(40, 90, 150, 0.22));
+      border: 1px solid var(--vscode-focusBorder, rgba(80, 140, 200, 0.35));
       color: var(--vscode-foreground);
-      border-radius: 4px;
-      padding: 6px 10px;
+      border-radius: 8px;
+      padding: 7px 11px;
     }
     .msg.user .context-annotation {
       font-family: var(--ui-font);
@@ -538,43 +601,6 @@ const CSS_TEMPLATE = /* css */ `
     #background-process-status .process-ids { color: var(--vscode-descriptionForeground); }
     @keyframes process-pulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
 
-    /* ── Todo overlay ──────────────────────────────── */
-    /* Rendered as a card anchored directly above the composer. Matches the
-       composer's horizontal margins so the two read as one stacked unit. */
-    #todo-overlay {
-      font-family: var(--ui-font); font-size: 0.82em;
-      margin: 0 8px 4px; padding: 6px 10px;
-      background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.05));
-      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
-      border-radius: 8px;
-      flex-shrink: 0; display: none;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-    }
-    #todo-overlay .todo-header {
-      font-weight: 700; font-size: 0.78em;
-      text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 4px;
-    }
-    #todo-overlay .todo-item {
-      display: flex; align-items: flex-start; gap: 6px;
-      padding: 2px 0;
-    }
-    #todo-overlay .todo-icon {
-      flex-shrink: 0; width: 1.2em; text-align: center;
-    }
-    #todo-overlay .todo-icon.completed { color: #4EC9B0; }
-    #todo-overlay .todo-icon.in_progress { color: var(--gold); }
-    #todo-overlay .todo-icon.pending { opacity: 0.4; }
-    #todo-overlay .todo-text { flex: 1; }
-    #todo-overlay .todo-text.completed {
-      text-decoration: line-through; opacity: 0.5;
-    }
-    #todo-overlay .todo-text.in_progress { color: var(--gold); font-weight: 500; }
-    #todo-overlay .todo-summary {
-      font-size: 0.8em; opacity: 0.5; margin-top: 3px;
-    }
-
     /* History divider */
     .history-divider {
       text-align: center;
@@ -692,6 +718,7 @@ const CSS_TEMPLATE = /* css */ `
     /* ── Composer (textarea + toolbar wrapped in one glowing pill) ── */
     #composer {
       margin: 4px 8px 8px;
+      position: relative;
       background: var(--vscode-input-background);
       border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3));
       border-radius: 8px;
@@ -727,7 +754,7 @@ const CSS_TEMPLATE = /* css */ `
     #input:focus { outline: none; }
 
     /* Send / Stop / Queue group (lives in #bottom-bar now) */
-    #input-btns { display: flex; align-items: center; flex-shrink: 0; }
+    #input-btns { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
     #action-area { display: flex; align-items: center; }
     #input-btns button {
       font-family: var(--ui-font); font-size: 0.78em; font-weight: 600;
@@ -818,6 +845,16 @@ const CSS_TEMPLATE = /* css */ `
       min-width: 180px; z-index: 200; overflow: hidden;
       max-height: 350px; overflow-y: auto;
     }
+    /* Mention picker: anchored above the composer, not below like the
+       header dropdowns, because the composer sits at the bottom of the view. */
+    #mention-menu {
+      position: absolute; bottom: 100%; left: 8px; right: 8px;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+      border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBarSectionHeader-border));
+      border-radius: 4px; margin-bottom: 4px;
+      z-index: 220; overflow-y: auto; max-height: 240px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    }
     .model-option {
       padding: 5px 10px; font-size: 0.85em; font-family: var(--ui-font);
       color: var(--vscode-foreground); cursor: pointer; white-space: nowrap;
@@ -825,6 +862,101 @@ const CSS_TEMPLATE = /* css */ `
     .model-option:hover { background: var(--gold-subtle); color: var(--gold); }
     .model-option.active { color: var(--gold); font-weight: 600; }
     .model-option.active::before { content: '✓ '; }
+    /* Mention rows share the dropdown look but not its semantics: active
+       here means highlighted by the arrow keys, not currently selected,
+       so no checkmark. Long paths ellipsize rather than scroll sideways. */
+    .mention-option {
+      padding: 5px 10px; font-size: 0.85em; font-family: var(--ui-font);
+      color: var(--vscode-foreground); cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* ── Plan block ──────────────────────────────────
+       Inline checklist, owned by the turn that produced it. */
+    .plan-block {
+      margin: 6px 0 6px 18px;
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-family: var(--ui-font); font-size: 0.78em;
+      background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.06));
+    }
+    .plan-t {
+      font-weight: 700; font-size: 0.92em;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--gold); margin-bottom: 5px;
+    }
+    .plan-n { opacity: 0.6; font-weight: 400; letter-spacing: 0; }
+    .plan-i {
+      display: flex; align-items: flex-start; gap: 6px;
+      padding: 2px 0; color: var(--vscode-foreground); opacity: 0.85;
+    }
+    .plan-bx {
+      display: inline-block; width: 11px; height: 11px; flex-shrink: 0;
+      margin-top: 2px; border-radius: 3px; font-size: 9px;
+      line-height: 11px; text-align: center;
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.45));
+    }
+    .plan-i.done { opacity: 0.55; }
+    .plan-i.done .plan-bx {
+      color: var(--vscode-gitDecoration-addedResourceForeground, #89d185);
+      border-color: var(--vscode-gitDecoration-addedResourceForeground, #89d185);
+    }
+    /* The step in progress is the one thing worth finding instantly. */
+    .plan-i.now { opacity: 1; font-weight: 600; }
+    .plan-i.now .plan-bx {
+      border-color: var(--gold);
+      box-shadow: inset 0 0 0 2px var(--gold);
+    }
+    .plan-i.skip { opacity: 0.4; text-decoration: line-through; }
+
+    /* ── Tool cards ──────────────────────────────────
+       Boxed rendering for calls whose output is worth reading inline.
+       Quick lookups keep the flat .msg.tool row above. */
+    .tool-card {
+      margin: 6px 0 6px 18px;
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.06));
+    }
+    .tool-card.error { border-color: var(--vscode-errorForeground, #f48771); }
+    .tool-card-h {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 9px; cursor: pointer;
+      font-family: var(--ui-font); font-size: 0.78em;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+    }
+    .tool-card-h:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08)); }
+    .tool-card-ic { color: var(--gold); font-size: 0.9em; }
+    .tool-card.error .tool-card-ic { color: var(--vscode-errorForeground, #f48771); }
+    .tool-card-nm { color: var(--vscode-foreground); opacity: 0.9; }
+    .tool-card-st { margin-left: auto; opacity: 0.55; font-size: 0.92em; }
+    .tool-card-b {
+      padding: 7px 9px; margin: 0;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.78em; line-height: 1.45;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 260px; overflow-y: auto;
+      color: var(--vscode-foreground); opacity: 0.85;
+    }
+    .tool-card.collapsed .tool-card-b { display: none; }
+    .tool-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #f48771); }
+    .tool-add { color: var(--vscode-gitDecoration-addedResourceForeground, #89d185); }
+
+    .mention-option:hover { background: var(--gold-subtle); color: var(--gold); }
+    .mention-option.active {
+      background: var(--vscode-list-activeSelectionBackground, var(--gold-subtle));
+      color: var(--vscode-list-activeSelectionForeground, var(--gold));
+    }
+    /* Names which catalogue is showing, and advertises the skill: prefix,
+       which is otherwise undiscoverable. */
+    .mention-hint {
+      padding: 4px 10px; font-size: 0.7em; font-family: var(--ui-font);
+      color: var(--vscode-descriptionForeground); opacity: 0.8;
+      border-bottom: 1px solid var(--vscode-dropdown-border, rgba(128,128,128,0.25));
+      position: sticky; top: 0;
+      background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+    }
     .model-group-label {
       padding: 4px 10px 2px; font-size: 0.7em; font-family: var(--ui-font);
       color: var(--vscode-descriptionForeground); opacity: 0.7;

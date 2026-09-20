@@ -39,7 +39,10 @@ class FakeClient {
       if (this.emitBackgroundDuringLoad) {
         this.emit('other-session', 'other session completed', true);
       }
-      return {};
+      // A real LoadSessionResponse carries session fields. The adapter answers
+      // a MISSING session with `{}`, so an empty object here would mean
+      // not-found — the fixture previously returned that for the success path.
+      return { models: { availableModels: [], currentModelId: 'test' } };
     }
     if (method === 'session/new') {
       if (this.holdSessionNew) {

@@ -21,7 +21,12 @@ class FakeChildProcess extends EventEmitter {
         setTimeout(() => {
           const result = request.method === 'session/new'
             ? { sessionId: 'persisted-session' }
-            : {};
+            // A real LoadSessionResponse carries session fields; the adapter
+            // answers a MISSING session with `{}`, so an empty object here
+            // would read as not-found.
+            : request.method === 'session/load'
+              ? { models: { availableModels: [], currentModelId: 'test' } }
+              : {};
           const response = request.method === 'initialize' && this.initializeError
             ? { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: this.initializeError } }
             : { jsonrpc: '2.0', id: request.id, result };

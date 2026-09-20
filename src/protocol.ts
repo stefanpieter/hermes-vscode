@@ -6,7 +6,7 @@
  * this module owns parsing (extracting fields from wire format).
  */
 
-import type { AutonomousTurnState, BackgroundProcessState, SessionUpdateEvent, TodoState } from './types';
+import type { AutonomousTurnState, BackgroundProcessState, SessionUpdateEvent, TodoState, TodoItem } from './types';
 
 type RawUpdate = Record<string, unknown>;
 
@@ -59,8 +59,74 @@ export interface ParsedToolCall {
   toolCallId?: string;
   kind: string;
   locations: string[];
+  /** Line each location points at, index-aligned with `locations`. */
+  locationLines: (number | undefined)[];
   detail?: string;
   todoState?: TodoState;
+  /** Formatted tool output: results, diffs, command text. */
+  content?: string;
+}
+
+/**
+ * Text from an ACP tool call's content blocks.
+ *
+ * `acp_adapter/tools.py` attaches formatted results to every polished tool and
+ * diffs for write_file/patch. Blocks nest as `{type:'content', content:{type:
+ * 'text', text}}`; anything that is not text (images, resource links) has no
+ * inline representation here and is skipped.
+ */
+export function extractToolContent(update: RawUpdate): string | undefined {
+  const blocks = update.content;
+  if (!Array.isArray(blocks)) return undefined;
+
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const outer = block as { content?: unknown; text?: unknown };
+    const inner = outer.content as { text?: unknown } | undefined;
+    const text = typeof inner?.text === 'string'
+      ? inner.text
+      : typeof outer.text === 'string' ? outer.text : undefined;
+    if (text) parts.push(text);
+  }
+
+  return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
+/**
+ * Whether a tool call ended in failure.
+ *
+ * ACP's ToolCallStatus is pending|in_progress|completed|failed. The UI
+ * previously compared against `'error'`, which the agent never sends, so a
+ * failed tool showed a spinner forever. `'error'` is still accepted so an
+ * older agent keeps working.
+ */
+export function isToolFailure(status: string | undefined): boolean {
+  return status === 'failed' || status === 'error';
+}
+
+/**
+ * Whether a `session/load` response means the session actually loaded.
+ *
+ * `acp_adapter/server.py:615` returns Python `None` for a missing session, but
+ * the JSON-RPC layer serialises that as `"result": {}` — not null. A
+ * `result !== null` check therefore passes, the client logs "resumed", and the
+ * next `session/prompt` is sent to a session the agent never heard of. It
+ * answers `{"stopReason":"refusal"}` with no updates, so the chat accepts
+ * input and silently never replies.
+ *
+ * A real LoadSessionResponse always carries session fields, so a response with
+ * no keys means not-found.
+ */
+export function isSessionLoaded(result: unknown): boolean {
+  if (result === null || result === undefined) return false;
+  if (typeof result !== 'object') return false;
+  return Object.keys(result as Record<string, unknown>).length > 0;
+}
+
+/** Whether a `session/prompt` response was refused outright (dead session). */
+export function isPromptRefused(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  return (result as { stopReason?: unknown }).stopReason === 'refusal';
 }
 
 /** Parse a tool_call update into typed fields. */
@@ -71,8 +137,12 @@ export function parseToolCall(update: RawUpdate): ParsedToolCall {
   const kind = (update.kind as string) ?? 'other';
 
   // Extract file paths from locations
-  const rawLocations = update.locations as { path?: string }[] | undefined;
-  const locations = rawLocations?.map(l => l.path).filter((p): p is string => !!p) ?? [];
+  const rawLocations = update.locations as { path?: string; line?: number }[] | undefined;
+  const located = rawLocations?.filter((l): l is { path: string; line?: number } => !!l.path) ?? [];
+  const locations = located.map(l => l.path);
+  // Kept index-aligned with `locations` so a click can reveal the exact line
+  // the tool touched instead of opening at the top of the file.
+  const locationLines = located.map(l => (typeof l.line === 'number' ? l.line : undefined));
 
   // Extract detail + todo state from rawInput
   let detail: string | undefined;
@@ -87,7 +157,34 @@ export function parseToolCall(update: RawUpdate): ParsedToolCall {
     }
   }
 
-  return { title, status, toolCallId, kind, locations, detail, todoState };
+  return { title, status, toolCallId, kind, locations, locationLines, detail, todoState, content: extractToolContent(update) };
+}
+
+/**
+ * Per-turn token usage from a `session/prompt` response.
+ *
+ * `acp_adapter/server.py:983` returns Usage on every PromptResponse. The
+ * return value was discarded, so `cachedTokens` was never populated and the
+ * status bar's cache share always read zero.
+ */
+export function parseUsageFromPrompt(
+  response: RawUpdate,
+): { contextUsed: number; cachedTokens?: number } | undefined {
+  const usage = response.usage as Record<string, unknown> | undefined;
+  if (!usage) return undefined;
+
+  const num = (...keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const value = usage[key];
+      if (typeof value === 'number') return value;
+    }
+    return undefined;
+  };
+
+  const contextUsed = num('inputTokens', 'input_tokens');
+  if (contextUsed === undefined) return undefined;
+
+  return { contextUsed, cachedTokens: num('cachedReadTokens', 'cached_read_tokens') };
 }
 
 // ── Tool call update parsing ─────────────────────────
@@ -97,6 +194,8 @@ export interface ParsedToolCallUpdate {
   status: string;
   todoState?: TodoState;
   backgroundProcess?: BackgroundProcessState;
+  /** Formatted tool output — usually arrives here, not on the initial call. */
+  content?: string;
 }
 
 /** Parse a Hermes terminal/process tool result into persistent process state. */
@@ -169,7 +268,7 @@ export function parseToolCallUpdate(update: RawUpdate): ParsedToolCallUpdate {
   const todoState = extractTodoFromUpdate(update);
   const backgroundProcess = parseBackgroundProcessFromToolUpdate(update);
 
-  return { toolCallId, status, todoState, backgroundProcess };
+  return { toolCallId, status, todoState, backgroundProcess, content: extractToolContent(update) };
 }
 
 // ── Todo detection ───────────────────────────────────
@@ -249,3 +348,34 @@ export function parseSessionInfoUpdate(update: RawUpdate): string | null {
   const title = update.title as string | undefined;
   return title?.trim() || null;
 }
+
+/**
+ * Read ACP's native plan update into todo items.
+ *
+ * Hermes emits `sessionUpdate: "plan"` whenever its todo tool runs
+ * (`acp_adapter/events.py`), which is the first-class channel Zed renders as a
+ * task panel. Returns null when the update is not a plan, and an empty array
+ * for a plan with no entries, so the caller can clear rather than render an
+ * empty block.
+ */
+export function parsePlanUpdate(update: RawUpdate): TodoItem[] | null {
+  if (update.sessionUpdate !== 'plan') return null;
+
+  const entries = update.entries;
+  if (!Array.isArray(entries)) return null;
+
+  return entries.map(entry => {
+    const raw = entry as { content?: unknown; status?: unknown };
+    const status = String(raw.status ?? '');
+    return {
+      content: String(raw.content ?? ''),
+      // An unrecognised status still describes a real step, so it is kept as
+      // pending rather than dropped.
+      status: PLAN_STATUS.includes(status as TodoItem['status'])
+        ? (status as TodoItem['status'])
+        : 'pending',
+    };
+  });
+}
+
+const PLAN_STATUS: TodoItem['status'][] = ['pending', 'in_progress', 'completed', 'cancelled'];

@@ -13,7 +13,6 @@ import { applyProfileSelection } from './profileSelection';
 import { ensureAcpClientStarted } from './connectionLifecycle';
 import { isOriginalExtensionInstalled, ORIGINAL_EXTENSION_ID } from './successorIdentity';
 import {
-  EDIT_APPROVAL_MODES,
   EditApprovalModeId,
   editApprovalModeLabel,
   normalizeEditApprovalMode,
@@ -473,15 +472,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand('hermes.selectEditApprovalMode', async () => {
       outputChannel.appendLine('[ui] select edit approval mode');
+      // Prefer what the running agent advertised over the compiled-in table,
+      // so a mode Hermes adds or renames shows up without a release here.
+      const modes = panel.editApprovalModeOptions;
+      const currentLabel = modes.find(mode => mode.id === editApprovalMode)?.label
+        ?? editApprovalModeLabel(editApprovalMode);
       const picked = await vscode.window.showQuickPick(
-        EDIT_APPROVAL_MODES.map(mode => ({
+        modes.map(mode => ({
           label: mode.label,
           description: mode.description,
           detail: mode.id === editApprovalMode ? 'Current mode' : undefined,
           modeId: mode.id,
         })),
         {
-          placeHolder: `Current: ${editApprovalModeLabel(editApprovalMode)}`,
+          placeHolder: `Current: ${currentLabel}`,
           title: 'Hermes edit approval mode',
         },
       );

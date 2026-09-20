@@ -26,11 +26,13 @@
 
 import { AcpClient } from './acpClient';
 import { EditApprovalModeId, normalizeEditApprovalMode } from './editApprovalMode';
+import { buildPromptBlocks, type ResolvedMention } from './mentions';
 import type { SessionUpdateEvent, SessionUpdateHandler } from './types';
 import {
   extractTextContent, deduplicateChunk,
   parseToolCall, parseToolCallUpdate,
   parseUsageUpdate, parseSessionInfoUpdate, parseBackgroundProcessMeta, parseAutonomousTurnMeta,
+  parsePlanUpdate, parseUsageFromPrompt, isSessionLoaded, isPromptRefused,
   parseCompressionCount,
 } from './protocol';
 import { parseAgentActivities } from './agentActivity';
@@ -44,6 +46,16 @@ interface PromptTurn {
   sessionId: string | null;
   cancelled: boolean;
   promptActive: boolean;
+}
+
+/**
+ * The session fields acp_adapter/server.py:_session_response_fields returns.
+ * `session/new` and `session/load` answer with the same shape.
+ */
+interface AcpSessionResponse {
+  sessionId?: string;
+  models?: { currentModelId?: string; availableModels?: { modelId?: string; name?: string }[] };
+  modes?: { currentModeId?: string; availableModes?: { id?: string; name?: string; description?: string }[] };
 }
 
 export class SessionManager {
@@ -144,6 +156,31 @@ export class SessionManager {
     this.log(`[session] edit approval mode ${this.editApprovalMode}`);
   }
 
+  /**
+   * Forward the catalogs an ACP session response carries.
+   *
+   * `session/new` and `session/load` return the same `models`/`modes` shape
+   * (acp_adapter/server.py:_session_response_fields), so both paths emit
+   * through here. An absent inventory stays absent: emitting an empty catalog
+   * would blank a working picker on an adapter too old to send one.
+   */
+  private emitCatalogs(result: AcpSessionResponse): void {
+    const modelState = result.models;
+    const modeState = result.modes;
+    const hasModels = !!modelState?.availableModels?.length;
+    const hasModes = !!modeState?.availableModes?.length;
+    // A currentModelId with no list behind it is not an inventory: emitting it
+    // would replace a populated picker with an empty one.
+    if (!hasModels && !hasModes) return;
+    if (!this.updateHandler || !this.sessionId) return;
+    this.updateHandler({
+      session_id: this.sessionId,
+      model: modelState?.currentModelId,
+      modelState,
+      modeState,
+    });
+  }
+
   async ensureSession(cwd: string): Promise<string> {
     if (this.sessionId) {
       this.log(`[session] reusing ${this.sessionId}`);
@@ -180,6 +217,7 @@ export class SessionManager {
       const storedId = this.storedSessionId;
       this.storedSessionId = null;
       let loaded = false;
+      let loadedCatalogs: AcpSessionResponse | undefined;
       const replayBinding = { sessionId: storedId, generation };
       try {
         this.log(`[session] attempting session/load ${storedId}`);
@@ -194,9 +232,12 @@ export class SessionManager {
           mcpServers: [],
         });
         this.assertBindingCurrent(generation);
-        // Adapter returns null when session not found — load_session() → None
-        if (result !== null && result !== undefined) {
+        // The adapter answers a missing session with `{}`, not null (see
+        // isSessionLoaded), so an emptiness check is what distinguishes a real
+        // resume from a silent failure.
+        if (isSessionLoaded(result)) {
           loaded = true;
+          loadedCatalogs = result as AcpSessionResponse;
           this.log(`[session] resumed ${storedId}`);
         } else {
           this.sessionId = null;
@@ -212,6 +253,9 @@ export class SessionManager {
       if (loaded) {
         await this.applyEditApprovalMode(storedId);
         this.assertBindingCurrent(generation);
+        // After the replay events, so a resumed window's last event is still the
+        // replayed history rather than a catalog refresh.
+        if (loadedCatalogs) this.emitCatalogs(loadedCatalogs);
         return storedId;
       }
       // Fall through to session/new
@@ -222,7 +266,7 @@ export class SessionManager {
     const result = (await this.client.call('session/new', {
       cwd,
       mcpServers: [],
-    })) as { sessionId: string; models?: { currentModelId?: string } };
+    })) as AcpSessionResponse & { sessionId: string };
     this.assertBindingCurrent(generation);
 
     this.sessionId = result.sessionId;
@@ -230,11 +274,11 @@ export class SessionManager {
     await this.applyEditApprovalMode(this.sessionId);
     this.assertBindingCurrent(generation);
 
-    // Emit initial model from session/new response
-    const model = result.models?.currentModelId;
-    if (model && this.updateHandler) {
-      this.updateHandler({ session_id: this.sessionId, model });
-    }
+    // Emit initial model from session/new response. `models` also carries the
+    // authenticated inventory, which is the only source that knows about local,
+    // custom, and named-endpoint providers — forward it so the picker stops
+    // relying on a hardcoded list. `modes` is authoritative the same way.
+    this.emitCatalogs(result);
 
     return this.sessionId;
   }
@@ -244,6 +288,12 @@ export class SessionManager {
     cwd: string,
     onSessionBound?: (sessionId: string) => void,
     beforeSessionBinding?: () => Promise<void>,
+    /**
+     * Resolved `@` mentions. Each becomes a `resource_link` block that Hermes
+     * reads from disk itself, so a mention costs one URI rather than the file's
+     * contents inlined into the prompt.
+     */
+    mentions?: ResolvedMention[],
   ): Promise<void> {
     if (this.activePromptTurn) throw new Error('Prompt already active');
     const turn: PromptTurn = {
@@ -265,11 +315,12 @@ export class SessionManager {
       this.log(`[session] prompt ${sessionId} (${text.length} chars)`);
 
       turn.promptActive = true;
+      let promptResult: Record<string, unknown> | undefined;
       try {
-        await this.client.call('session/prompt', {
+        promptResult = (await this.client.call('session/prompt', {
           sessionId,
-          prompt: [{ type: 'text', text }],
-        });
+          prompt: buildPromptBlocks(text, mentions ?? []),
+        })) as Record<string, unknown>;
       } catch (err) {
         if (turn.cancelled) throw new Error('Cancelled');
         throw err;
@@ -279,8 +330,22 @@ export class SessionManager {
       // next queued turn while the cancelled request is still live remotely.
       if (turn.cancelled) throw new Error('Cancelled');
 
-      // PromptResponse usage is cumulative turn billing, not current context
-      // pressure. Context metrics arrive authoritatively via usage_update.
+      // A refusal means the agent has no such session, so no updates were ever
+      // sent. Without this the turn "completes" having rendered nothing.
+      if (isPromptRefused(promptResult)) {
+        this.sessionId = null;
+        this.log('[session] prompt refused — session gone on the agent; cleared for rebind');
+        throw new Error('That session no longer exists on the agent. Send again to start a new one.');
+      }
+
+      // PromptResponse usage is CUMULATIVE session billing, not a context
+      // snapshot — the suite's fixture reports 2.7M input tokens against a 1M
+      // window. Forwarding its cachedReadTokens would be mixed with
+      // usage_update's current `used` in menus.ts (fresh = used - cached) and
+      // produce a negative fresh count and a permanent 100% cache reading.
+      // parseUsageFromPrompt exists for per-turn billing display, which has no
+      // UI yet; deliberately not wired to the context meter.
+      void promptResult;
       this.log(`[session] prompt done ${sessionId}`);
       this.updateHandler?.({ session_id: sessionId, done: true });
     } finally {
@@ -408,6 +473,16 @@ export class SessionManager {
         break;
       }
 
+      case 'user_message_chunk': {
+        // Emitted when the adapter drains a queued prompt (server.py:980) and
+        // during session/load replay. Without this the reply to a queued
+        // message arrives with no visible question above it.
+        const text = extractTextContent(update);
+        if (!text) return;
+        event.userEcho = text;
+        break;
+      }
+
       case 'agent_thought_chunk': {
         if (this.activePromptTurn?.cancelled && this.activePromptTurn.sessionId === session_id) return;
         const text = extractTextContent(update);
@@ -430,8 +505,12 @@ export class SessionManager {
         )) {
           this.delegateToolCalls.add(`${session_id}\0${parsed.toolCallId}`);
         }
-        if (parsed.locations.length) event.toolLocations = parsed.locations;
+        if (parsed.locations.length) {
+          event.toolLocations = parsed.locations;
+          event.toolLocationLines = parsed.locationLines;
+        }
         if (parsed.detail) event.toolDetail = parsed.detail;
+        if (parsed.content) event.toolContent = parsed.content;
         if (parsed.todoState) {
           event.todoState = parsed.todoState;
           this.log(`[session] todo tool_call: ${parsed.todoState.todos.length} items`);
@@ -456,6 +535,7 @@ export class SessionManager {
           }
         }
         if (cancelledOwner && !event.delegationRegistration) return;
+        if (parsed.content) event.toolContent = parsed.content;
         if (parsed.backgroundProcess) event.backgroundProcess = parsed.backgroundProcess;
         if (parsed.todoState) {
           event.todoState = parsed.todoState;
@@ -477,6 +557,15 @@ export class SessionManager {
         const title = parseSessionInfoUpdate(update);
         if (title) event.sessionTitle = title;
         else if (!event.agentActivities && event.compressionCount === undefined) return;
+        break;
+      }
+
+      case 'plan': {
+        // Hermes' native plan channel. Without this the only plans that ever
+        // reached the UI were the ones scraped out of streamed text.
+        const todos = parsePlanUpdate(update);
+        if (todos === null) return;
+        event.todoState = { todos };
         break;
       }
 

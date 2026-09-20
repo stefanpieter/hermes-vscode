@@ -77,38 +77,25 @@ export function formatToolDisplay(
   return { label, info: detail ?? '' };
 }
 
-// ── Todo overlay ─────────────────────────────────────
+// ── Todo detection ───────────────────────────────────
 
-const TODO_ICONS: Record<string, string> = {
-  completed: '✓', in_progress: '■', pending: '□', cancelled: '✗',
-};
-
-export function renderTodoOverlay(container: HTMLElement, todos: TodoItem[]): void {
-  if (!todos.length) { container.style.display = 'none'; return; }
-  const completed = todos.filter(t => t.status === 'completed').length;
-  const items = todos.map(t => {
-    const icon = TODO_ICONS[t.status] ?? '□';
-    const text = t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content;
-    return `<div class="todo-item">
-      <span class="todo-icon ${t.status}">${icon}</span>
-      <span class="todo-text ${t.status}">${DOMPurify.sanitize(text)}</span>
-    </div>`;
-  }).join('');
-  container.innerHTML = `<div class="todo-header">Tasks ${completed}/${todos.length}</div>${items}`;
-  container.style.display = 'block';
-}
-
-export function detectTodoUpdate(text: string, container: HTMLElement): boolean {
+/**
+ * Todos scraped from streamed agent text, if present.
+ *
+ * A fallback for agents that print a todo JSON blob instead of sending a
+ * structured `todoState`. Returns the todos rather than rendering them, so
+ * both paths end in the same inline plan block.
+ */
+export function detectTodoUpdate(text: string): TodoItem[] | null {
   const match = /\{[\s\S]*"todos"\s*:\s*\[[\s\S]*\][\s\S]*\}/.exec(text);
-  if (!match) return false;
+  if (!match) return null;
   try {
     const data = JSON.parse(match[0]);
     if (Array.isArray(data.todos) && data.todos.length > 0) {
-      renderTodoOverlay(container, data.todos);
-      return true;
+      return data.todos as TodoItem[];
     }
   } catch { /* not valid JSON */ }
-  return false;
+  return null;
 }
 
 // ── History loading ──────────────────────────────────
